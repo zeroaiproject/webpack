@@ -27,6 +27,7 @@
 @keyframes spin { to { opacity: 0; } }
 .spinning { animation: spin 1s; }
 .a\>b { color: olive; }
+[class~="byAttribute"] { color: coral; }
 </style>
 <link rel="stylesheet" href="./linked.module.css">
 <style module lang="less">
@@ -61,6 +62,7 @@ $size: 6px;
 <p class="spin spinning">a @keyframes name is not a class</p>
 <p class="local&nbsp;x" id="&nbsp;anchor">a no-break space is part of a name</p>
 <p class=a&gt;b>an unquoted value a name makes unsafe</p>
+<p class="byAttribute">a name only an attribute selector scopes</p>
 <script class="local">window.first = 1;</script>
 <script class="local">window.second = 2;</script>
 </body>

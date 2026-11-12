@@ -143,3 +143,10 @@ it("should leave no name of a script tag the page drops", () => {
 	const scripts = body.slice(body.indexOf("<script"), body.indexOf("</body>"));
 	expect(scripts.trim()).toBe('<script src="page.js" class="m_local"></script>');
 });
+
+it("should scope a name only an attribute selector scopes", () => {
+	expect(tagOf("a name only an attribute selector scopes")).toBe(
+		'<p class="m_byAttribute">'
+	);
+	expect(sheet).toMatch(/\[class~="m_byAttribute"\] \{ color: coral; \}/);
+});
