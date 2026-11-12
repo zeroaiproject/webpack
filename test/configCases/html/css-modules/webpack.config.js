@@ -35,6 +35,8 @@ module.exports = {
 			"css/auto": { localIdentName: "a_[local]" }
 		},
 		rules: [
+			// A CSS module by its rule alone, not by its name.
+			{ test: /by-rule\.css$/, type: "css/module" },
 			{ mimetype: "text/less", use: lessLoader },
 			{
 				mimetype: "text/x-scss",

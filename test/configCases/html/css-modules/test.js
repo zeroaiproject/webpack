@@ -32,6 +32,10 @@ it("should rewrite the page's class and id with the module names", () => {
 	// A character reference is decoded before the name is looked up.
 	expect(body).toContain('<div id="other" class="m_btn">four</div>');
 	expect(body).toContain('<div style="color: red" class="">five</div>');
+	// An unquoted value is quoted once `composes` gives it a space.
+	expect(body).toContain('<div class="m_primary m_base">six</div>');
+	// A stylesheet its rule makes a CSS module scopes the page too.
+	expect(body).toContain('<div class="m_ruled">seven</div>');
 });
 
 it("should scope a linked CSS module and leave a linked global sheet", () => {
