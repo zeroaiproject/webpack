@@ -23,11 +23,12 @@ it("should rewrite the page's class and id with the module names", () => {
 	expect(body).toContain('<body id="m_main">');
 	// `composes` adds the composed class; a global one stays as written.
 	expect(body).toContain(
-		'<button class="m_btn  m_primary m_base shell" data-class="btn">'
+		'<button class="m_btn m_primary m_base shell" data-class="btn">'
 	);
 	expect(body).toContain(
 		'<div class="a_card m_less-scoped m_scss-scoped plain global">'
 	);
+	// The linked `card.module.css` comes first, so its `.card` wins.
 	expect(body).toContain("<div class=a_card>three</div>");
 	// A character reference is decoded before the name is looked up.
 	expect(body).toContain('<div id="other" class="m_btn">four</div>');
