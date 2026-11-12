@@ -7373,7 +7373,7 @@ declare abstract class CssParser extends Parser<BuiltCssModule> {
 		 */
 		defaultMode?: "global" | "auto" | "local" | "pure";
 		/**
-		 * keep which names a CSS module declares as a class or an id, for an HTML page whose `class` and `id` name them (set when `experiments.html` is on)
+		 * keep which names a CSS module declares as something other than a class or an id (a `@keyframes`, a `@counter-style`), which an HTML page's `class` and `id` never name (set when `experiments.html` is on)
 		 */
 		selectorNames?: boolean;
 	};
