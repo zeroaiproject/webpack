@@ -1614,7 +1614,7 @@ describe("JavaScript minifier printing a SyntaxTree", () => {
 			[fixture("javascript", "javascript-minifier-printing-a-syntax-tree-should-compress-in-the-one-pass-583"), {}, "x=a&&b?c:d,x=a||c?b:d,x=a?b?d:c:c,x=(a=1,b||e?c:d),x=(a||f)&&b?c:d,x=a||c||e?b:d,x=a?b?c:d:e;"],
 			[fixture("javascript", "javascript-minifier-printing-a-syntax-tree-should-compress-in-the-one-pass-584"), { mangle: false, ecma: 2020, compress: { toplevel: false, ecma: 2020 } }, "function k(a){x=a!=b?a:c,x=a??b+c,x=a??new B}x=(a,b)&&(c,d)?e:f;"],
 			// terser's `t?f(a,x):f(b,x)` as `f(t?a:b,x)`, a local `f`, a pure test and one argument apart.
-			[fixture("javascript", "javascript-minifier-printing-a-syntax-tree-should-compress-in-the-one-pass-585"), { mangle: false }, "function f(a,b){x=b(a?c:e,d),x=b(a===0?c:e),x=a?b(...c):b(...e),x=a()?b(1):b(2),x=a?b(1,2):b(3,4),a?b(g(),1):b(g(),2),x=b(a?c=1:e),x=b(a?(c,d):e)}x=a?f(1):f(2);"],
+			[fixture("javascript", "javascript-minifier-printing-a-syntax-tree-should-compress-in-the-one-pass-585"), { mangle: false }, "function f(a,b){x=b(a?c:e,d),x=b(a===0?c:e),x=b(...a?c:e),x=a()?b(1):b(2),x=a?b(1,2):b(3,4),a?b(g(),1):b(g(),2),x=b(a?c=1:e),x=b(a?(c,d):e)}x=a?f(1):f(2);"],
 			// terser's `unused` of a write whose value is read: nobody reading the name, it prints as the value, but not where the name is read, in its dead zone, through `arguments` or in dead code.
 			[fixture("javascript", "javascript-minifier-printing-a-syntax-tree-should-compress-in-the-one-pass-586"), { mangle: false }, "function f(){return 1}function g(b){return c(),b}function h(){x(1);if(k())l()}function i(){x(k())}function j(){var a;return x(a=k()),a}function k(){x(a=g());let a}function l(a){return x(a=g()),arguments}function m(c){for(;c;)c()}function n(a){var m=1;return m}function o(){p(),q()}"],
 			// A `for` start running nothing goes.
@@ -4497,6 +4497,22 @@ describe("one-pass minify of reads and calls on literals", () => {
 		);
 		const program = "function h(i){i++;return i}function l(i){var x=i++;return x**2}function f(a){a+=1;a+=2;return a}console.log(h(1),l(3),f(1))";
 		expect(runProgram(minifyOnePass(program, { compress: {}, mangle: false }).code)).toBe("2 9 4");
+	});
+
+	it("should merge the calls of a conditional differing in what one spread spreads", () => {
+		const source = "let x=g(),b=h();x?b(...c):b(...d);x?b(...x):b(...c);x?b(1,...c,2):b(1,...d,2);x?new b(...c):new b(...d);x?b(...c):b(d);x?b(...[1,2]):b(...d);";
+		// A spread against a plain argument, or one printing as its items, stays.
+		expect(minifyOnePass(source, { compress: {}, mangle: false }).code).toBe(
+			"let x=g(),b=h();b(...x?c:d),b(...x||c),b(1,...x?c:d,2),new b(...x?c:d),x?b(...c):b(d),x?b(1,2):b(...d);"
+		);
+	});
+
+	it("should fold a value running nothing into the compound assignment after it", () => {
+		const source = "var foo;function w(a){let x=foo;a+=x;return a}function v(a){let x=foo;a||=x;return a}function u(a){let x=g();a+=x;return a}w(),v(),u();";
+		// A value running code would run after the target is read.
+		expect(minifyOnePass(source, { compress: {}, mangle: false, ecma: 2021 }).code).toBe(
+			"var foo;function w(a){return a+=foo}function v(a){return a||=foo}function u(a){let x=g();return a+=x,a}w(),v(),u();"
+		);
 	});
 
 	it("should drop a `for`'s own declarator nothing reads", () => {
