@@ -19,6 +19,22 @@ const path = require("path");
 const { pathToFileURL } = require("url");
 const { promisify } = require("util");
 const zlib = require("zlib");
+const {
+	cutsAt,
+	firstDifference,
+	hasher,
+	idempotence,
+	oneLine,
+	pathSpanWalk,
+	purityRelation,
+	shrink,
+	signed,
+	sliceRelation,
+	spans,
+	thrownText
+} = require("../test/helpers/syntaxInvariants/relations");
+
+/** @typedef {import("../test/helpers/syntaxInvariants/relations").Report} Report */
 
 const ROOT = path.resolve(__dirname, "..");
 
@@ -258,7 +274,7 @@ const lossColumn = (classes, examples, notices) => {
 
 /** @typedef {[string, number][]} ProfileShares each file's share of the sampled time, largest first */
 
-/** @typedef {{ code: string | undefined, second: SecondPass | undefined, wall: number, cpu: number, peak: number, profile?: ProfileShares } | { error: string }} Measurement */
+/** @typedef {{ code: string | undefined, second: SecondPass | undefined, wall: number, cpu: number, peak: number, profile?: ProfileShares } | { error: string, timedOut?: boolean }} Measurement */
 
 /**
  * @typedef {object} CpuProfileNode
@@ -409,18 +425,6 @@ const peakResidentKilobytes = () => {
 };
 
 /**
- * @param {EXPECTED_ANY} error what a tool threw, which can be any value
- * @returns {string} the first line of what it says
- */
-const thrownText = (error) => {
-	const said =
-		error && /** @type {Error} */ (error).message
-			? /** @type {Error} */ (error).message
-			: error;
-	return String(said).split("\n", 1)[0];
-};
-
-/**
  * What a printer makes of its own output. A printer that is done printing
  * writes it back unchanged, so anything else is work a build repeats forever.
  * @param {(source: string) => EXPECTED_ANY} call the tool
@@ -508,23 +512,48 @@ const formatCost = (result, external) => ({
 	peak: external ? "-" : `${(result.peak / 1024).toFixed(0)} MB`
 });
 
+// A worker's whole run (load, warm-up, the timed runs and the second pass):
+// one slow tool on one large input, such as `@adobe/css-tools` on Bulma, would
+// otherwise hold up every table after it for many minutes.
+const MEASURE_BUDGET_MS = 300000;
+
 /**
  * @param {string} entry the calling script's path
  * @param {string} stage which table the row belongs to
  * @param {string} name the tool's name
  * @param {string} input the source to run it over
+ * @param {number=} budget how long the worker may run, in milliseconds
  * @returns {Promise<Measurement>} the worker's report
  */
-const measureInWorker = (entry, stage, name, input) =>
+const measureInWorker = (
+	entry,
+	stage,
+	name,
+	input,
+	budget = MEASURE_BUDGET_MS
+) =>
 	new Promise((resolve, reject) => {
 		const child = spawn(process.execPath, [entry, "--measure", stage, name], {
 			stdio: ["pipe", "pipe", "inherit"]
 		});
 		/** @type {Buffer[]} */
 		const chunks = [];
+		let timedOut = false;
+		const timer = setTimeout(() => {
+			timedOut = true;
+			child.kill();
+		}, budget);
 		child.stdout.on("data", (chunk) => chunks.push(chunk));
 		child.on("error", reject);
 		child.on("close", (code) => {
+			clearTimeout(timer);
+			if (timedOut) {
+				resolve({
+					error: `timed out after ${budget / 1000} s`,
+					timedOut: true
+				});
+				return;
+			}
 			if (code !== 0) {
 				reject(new Error(`measuring ${name} exited with ${code}`));
 				return;
@@ -573,55 +602,6 @@ const formatSecond = (second) => {
 
 // What a comparison cannot see, because being a few bytes off its own best is
 // not being worse than another tool: an output that moves when nothing moved.
-
-/**
- * A finding: which relation broke, what it did, and the smallest input found
- * that shows it.
- * @typedef {{ relation: string, what: string, repro: string }} Report
- */
-
-/**
- * @param {number} delta a byte difference
- * @returns {string} it signed
- */
-const signed = (delta) => `${delta > 0 ? "+" : ""}${delta} B`;
-
-/**
- * @param {string} text any text
- * @param {number} limit how much of it to keep
- * @returns {string} it on one line, cut to the limit
- */
-const oneLine = (text, limit) => {
-	let shown = "";
-	for (const character of text) {
-		const code = /** @type {number} */ (character.codePointAt(0));
-		// Tab, LF, FF and CR are left to the whitespace collapse below; every
-		// other control character is shown, since holding one is some findings.
-		shown +=
-			code > 0x1f ||
-			code === 0x9 ||
-			code === 0xa ||
-			code === 0xc ||
-			code === 0xd
-				? character
-				: `\\x${code.toString(16).padStart(2, "0")}`;
-	}
-	const flat = shown.replace(/\s+/g, " ").trim();
-	return flat.length > limit ? `${flat.slice(0, limit - 1)}…` : flat;
-};
-
-/**
- * @param {string} before one text
- * @param {string} after another
- * @returns {number} the first index they differ at
- */
-const firstDifference = (before, after) => {
-	const shortest = Math.min(before.length, after.length);
-	for (let i = 0; i < shortest; i++) {
-		if (before.charCodeAt(i) !== after.charCodeAt(i)) return i;
-	}
-	return shortest;
-};
 
 // --- Parser agreement -------------------------------------------------------
 
@@ -709,49 +689,169 @@ const saidBy = (event) =>
 			: event[2];
 
 /**
- * Where two trees first stop saying the same thing, or `undefined` where they
- * agree, short enough for a cell: each side and the path are cut.
+ * One difference as a cell, short enough to read: each side and the path are cut.
+ * @param {TreeEvent | undefined} left the reference's event there, if any
+ * @param {TreeEvent | undefined} right the tree's event there, if any
+ * @param {string} referenceName the reference parser
+ * @returns {string} the path and what each side says there
+ */
+const differenceCell = (left, right, referenceName) => {
+	const at = /** @type {TreeEvent} */ (left || right)[0] || "/";
+	// A deep path keeps its end, where the node that differs is named.
+	const shown = at.length > 60 ? `…${at.slice(-59)}` : at;
+	const theirs = saidBy(left);
+	const ours = saidBy(right);
+	// Two sides apart past the cut are both shown from just before the
+	// first character they differ at, or the cell shows them the same.
+	const differ =
+		theirs === undefined || ours === undefined
+			? 0
+			: firstDifference(theirs, ours);
+	const from = differ > 36 ? differ - 12 : 0;
+	/**
+	 * @param {string | undefined} said what one side says
+	 * @returns {string} it as the cell shows it
+	 */
+	const show = (said) =>
+		said === undefined
+			? "nothing"
+			: oneLine(from > 0 ? `…${said.slice(from)}` : said, 48);
+	return `${shown}: ${referenceName} ${show(theirs)}, tool ${show(ours)}`;
+};
+
+// Past this many edits the trees are too far apart to align, and what is
+// left of them is reported as one difference.
+const EDIT_BUDGET = 500;
+
+/**
+ * Every place two trees stop saying the same thing, in document order. They are
+ * aligned first (Myers' diff), so a node one side lacks is one difference.
  * @param {TreeEvents} reference the reference parser's tree
  * @param {TreeEvents} tree the tree under test
  * @param {string} referenceName the reference parser
- * @returns {string | undefined} the path and what each side says there
+ * @returns {string[]} each difference as a cell
  */
-const treeDifference = (reference, tree, referenceName) => {
-	const length = Math.max(reference.list.length, tree.list.length);
-	for (let i = 0; i < length; i++) {
-		const left = reference.list[i];
-		const right = tree.list[i];
-		if (
-			left !== undefined &&
-			right !== undefined &&
-			left[1] === right[1] &&
-			left[2] === right[2]
-		) {
-			continue;
-		}
-		const at = (left || right)[0] || "/";
-		// A deep path keeps its end, where the node that differs is named.
-		const shown = at.length > 60 ? `…${at.slice(-59)}` : at;
-		const theirs = saidBy(left);
-		const ours = saidBy(right);
-		// Two sides apart past the cut are both shown from just before the
-		// first character they differ at, or the cell shows them the same.
-		const differ =
-			theirs === undefined || ours === undefined
-				? 0
-				: firstDifference(theirs, ours);
-		const from = differ > 36 ? differ - 12 : 0;
-		/**
-		 * @param {string | undefined} said what one side says
-		 * @returns {string} it as the cell shows it
-		 */
-		const show = (said) =>
-			said === undefined
-				? "nothing"
-				: oneLine(from > 0 ? `…${said.slice(from)}` : said, 48);
-		return `${shown}: ${referenceName} ${show(theirs)}, tool ${show(ours)}`;
+const treeDifferences = (reference, tree, referenceName) => {
+	const theirs = reference.list;
+	const ours = tree.list;
+	/**
+	 * @param {number} i an event of the reference's
+	 * @param {number} j an event of the tree's
+	 * @returns {boolean} whether both say the same
+	 */
+	const same = (i, j) =>
+		theirs[i][1] === ours[j][1] && theirs[i][2] === ours[j][2];
+	let first = 0;
+	while (first < theirs.length && first < ours.length && same(first, first)) {
+		first++;
 	}
-	return undefined;
+	let theirEnd = theirs.length;
+	let ourEnd = ours.length;
+	while (theirEnd > first && ourEnd > first && same(theirEnd - 1, ourEnd - 1)) {
+		theirEnd--;
+		ourEnd--;
+	}
+	const n = theirEnd - first;
+	const m = ourEnd - first;
+	if (n === 0 && m === 0) return [];
+	const max = n + m;
+	// `furthest[max + k]` is how far along the reference diagonal `k` reaches.
+	const furthest = new Int32Array(2 * max + 2);
+	/** @type {Int32Array[]} */
+	const trace = [];
+	let found = false;
+	for (let d = 0; d <= Math.min(max, EDIT_BUDGET) && !found; d++) {
+		trace.push(furthest.slice(max - d, max + d + 2));
+		for (let k = -d; k <= d; k += 2) {
+			let x =
+				k === -d || (k !== d && furthest[max + k - 1] < furthest[max + k + 1])
+					? furthest[max + k + 1]
+					: furthest[max + k - 1] + 1;
+			let y = x - k;
+			while (x < n && y < m && same(first + x, first + y)) {
+				x++;
+				y++;
+			}
+			furthest[max + k] = x;
+			if (x >= n && y >= m) {
+				found = true;
+				break;
+			}
+		}
+	}
+	if (!found) {
+		return [
+			`${differenceCell(theirs[first], ours[first], referenceName)}, and too many more to align`
+		];
+	}
+	// Walk the edits back from the end, then read each run of them as one.
+	/** @type {[number, number][]} */
+	const kept = [];
+	let x = n;
+	let y = m;
+	for (let d = trace.length - 1; d > 0; d--) {
+		const before = trace[d];
+		/**
+		 * @param {number} k a diagonal
+		 * @returns {number} how far it reached before this step
+		 */
+		const reached = (k) => before[k + d];
+		const k = x - y;
+		const previous =
+			k === -d || (k !== d && reached(k - 1) < reached(k + 1)) ? k + 1 : k - 1;
+		const previousX = reached(previous);
+		const previousY = previousX - previous;
+		while (x > previousX && y > previousY) {
+			kept.push([--x, --y]);
+		}
+		x = previousX;
+		y = previousY;
+	}
+	kept.reverse();
+	kept.push([n, m]);
+	/** @type {string[]} */
+	const cells = [];
+	let i = 0;
+	let j = 0;
+	/**
+	 * @param {TreeEvent[]} list one side's events
+	 * @param {number} from where its run of edits starts
+	 * @param {number} to where it ends
+	 * @returns {TreeEvent} the event naming a run only this side has
+	 */
+	const named = (list, from, to) => {
+		// A run can start at a close it shares the shape of; name what it opens.
+		for (let at = from; at < to; at++) {
+			if (list[at][1] !== "close") return list[at];
+		}
+		return list[from];
+	};
+	for (const [keptX, keptY] of kept) {
+		if (keptX > i && keptY > j) {
+			cells.push(
+				differenceCell(theirs[first + i], ours[first + j], referenceName)
+			);
+		} else if (keptX > i) {
+			cells.push(
+				differenceCell(
+					named(theirs, first + i, first + keptX),
+					undefined,
+					referenceName
+				)
+			);
+		} else if (keptY > j) {
+			cells.push(
+				differenceCell(
+					undefined,
+					named(ours, first + j, first + keptY),
+					referenceName
+				)
+			);
+		}
+		i = keptX + 1;
+		j = keptY + 1;
+	}
+	return cells;
 };
 
 /** @typedef {(source: string) => TreeEvents | Promise<TreeEvents>} TreeReader */
@@ -792,8 +892,11 @@ const agreement = (referenceName, readers, source) => {
 		} catch (error) {
 			return `could not compare: ${thrownText(error)}`;
 		}
-		const said = treeDifference(theirs, tree, referenceName);
-		return said === undefined ? "yes" : `no — ${said}`;
+		const said = treeDifferences(theirs, tree, referenceName);
+		if (said.length === 0) return "yes";
+		return said.length === 1
+			? `no — ${said[0]}`
+			: `no — ${said[0]} (and ${said.length - 1} more)`;
 	};
 };
 
@@ -845,419 +948,32 @@ const agreementInvariant = ({
 					rejected++;
 					continue;
 				}
-				/** @type {string | undefined} */
+				/** @type {string[]} */
 				let said;
 				try {
-					said = treeDifference(theirs, tree(source), referenceName);
+					said = treeDifferences(theirs, tree(source), referenceName);
 				} catch (error) {
-					said = `/: webpack's parser throws: ${thrownText(error)}`;
+					said = [`/: webpack's parser throws: ${thrownText(error)}`];
 				}
-				if (said === undefined) continue;
-				groups.add(
-					{
-						relation: "agreement",
-						what: `webpack's tree reads apart from ${referenceName}'s`,
-						repro: `    ${said}`
-					},
-					"parse",
-					label
-				);
+				// Each difference stands alone, so one `EXPECTED` entry answers
+				// for its own and never hides another later in the source.
+				for (const difference of said) {
+					groups.add(
+						{
+							relation: "agreement",
+							what: `webpack's tree reads apart from ${referenceName}'s`,
+							repro: `    ${difference}`
+						},
+						"parse",
+						label
+					);
+				}
 			}
 			log(
 				`held ${corpus.length - rejected} trees to ${referenceName}'s (${rejected} it rejects) …`
 			);
 		}
 	};
-};
-
-// Each bisection step prints the whole source twice, so a page carrying
-// thousands of sites stops shrinking rather than holding up the report.
-const SHRINK_BUDGET = 40;
-
-/**
- * Bisect a finding down to the sites that carry it. Where neither half keeps it
- * the sites interact, and what is left stands as the report's repro.
- * @template S
- * @template {{ kind: string }} F
- * @param {(sites: S[]) => F | null} holds whether a subset still shows it
- * @param {S[]} sites every mutated site
- * @param {string} kind the kind to keep
- * @returns {S[]} the smallest subset found
- */
-const shrink = (holds, sites, kind) => {
-	let current = sites;
-	let budget = SHRINK_BUDGET;
-	while (current.length > 1 && budget > 0) {
-		const half = Math.ceil(current.length / 2);
-		const left = current.slice(0, half);
-		const right = current.slice(half);
-		budget -= 2;
-		const keptLeft = holds(left);
-		if (keptLeft !== null && keptLeft.kind === kind) {
-			current = left;
-			continue;
-		}
-		const keptRight = holds(right);
-		if (keptRight !== null && keptRight.kind === kind) {
-			current = right;
-			continue;
-		}
-		break;
-	}
-	return current;
-};
-
-/**
- * Whether printing an already-printed source changes it. A printer that is done
- * is done, so a second pass that moves is work every build repeats.
- * @param {object} options what to hold to the relation
- * @param {(source: string) => string} options.minify the printer under test
- * @param {((printed: string) => string)=} options.reprint how its output is printed again, where a second minify would change it rather than print it
- * @param {string} options.source the input
- * @param {(text: string) => string} options.says what a text says, as a digest
- * @param {((printed: string, at: number) => { source: string, again: string } | null)=} options.repro cuts the difference down to what reproduces it
- * @returns {{ printed: string | null, reports: Report[] }} what it printed, and what moved
- */
-const idempotence = ({ minify, reprint = minify, source, says, repro }) => {
-	/** @type {string} */
-	let printed;
-	try {
-		printed = minify(source);
-	} catch (error) {
-		return {
-			printed: null,
-			reports: [
-				{ relation: "minify", what: "threw", repro: `    ${thrownText(error)}` }
-			]
-		};
-	}
-	/** @type {string} */
-	let again;
-	try {
-		again = reprint(printed);
-	} catch (error) {
-		// A printer that reads its own output back and throws is the strongest
-		// finding there is, so it is reported rather than ending the sweep.
-		return {
-			printed,
-			reports: [
-				{
-					relation: "idempotence",
-					what: "threw",
-					repro: `    ${thrownText(error)}`
-				}
-			]
-		};
-	}
-	if (again === printed) return { printed, reports: [] };
-	const kind = says(again) === says(printed) ? "bytes" : "differs";
-	const at = firstDifference(printed, again);
-	const cut = repro === undefined ? null : repro(printed, at);
-	return {
-		printed,
-		reports: [
-			{
-				relation: "idempotence",
-				what: `${kind}, ${signed(again.length - printed.length)}`,
-				repro:
-					cut === null
-						? `    ${oneLine(printed.slice(at, at + 70), 70)}\n      -> ${oneLine(again.slice(at, at + 70), 70)}`
-						: `    ${oneLine(cut.source, 80)}\n      -> ${oneLine(cut.again, 80)}`
-			}
-		]
-	};
-};
-
-/**
- * The range a node sits in, as a span check reads it.
- * @typedef {{ what: string, start: number, end: number }} SpanParent
- */
-
-/**
- * A node a span check reads. `after` is the furthest any earlier sibling
- * reached, or `-1` for the first; `inner` names the sub-ranges the node states
- * itself, each `-1` where this node has none. `structural` is false for a node
- * the walk hands over without placing it in the tree — a CSS comment arrives
- * from the tokenizer, before the rule holding it has even opened — so it is
- * held to its own offsets and to nothing about where it sits.
- * @typedef {{ what: string, start: number, end: number, parent: SpanParent | null, after: number, structural?: boolean, inner?: readonly [string, number, number][] }} SpanNode
- */
-
-/**
- * Offsets read against an origin, so one construct's finding reads the same
- * wherever in a file it was found and groups with itself.
- * @param {number} origin what to measure from
- * @param {number} start a range's start
- * @param {number} end its end
- * @returns {string} the range relative to the origin
- */
-const _relative = (origin, start, end) => `[${start - origin},${end - origin})`;
-
-/**
- * Whether a tree's ranges say what the source says: nothing inverted, nothing
- * off the end of the source, and every sub-range inside the node that names it.
- * `contains` and `siblings` are asked for rather than assumed, because two of
- * webpack's three parsers owe one of them nothing — each adapter says which.
- * @param {object} options what to hold to the relation
- * @param {number} options.length the source's length
- * @param {(visit: (node: SpanNode) => void) => void} options.walk hands every node over, each after its parent
- * @param {boolean} options.contains whether a node's range must sit inside its parent's
- * @param {boolean} options.siblings whether two siblings' ranges may not overlap
- * @returns {Report[]} what the ranges broke
- */
-const spans = ({ length, walk, contains, siblings }) => {
-	/** @type {Report[]} */
-	const reports = [];
-	/**
-	 * @param {string} what the violation and what carried it
-	 * @param {string} detail the ranges that show it
-	 * @returns {void}
-	 */
-	const report = (what, detail) => {
-		reports.push({ relation: "spans", what, repro: `    ${detail}` });
-	};
-	walk((node) => {
-		const { what, start, end, parent, after, structural, inner } = node;
-		if (start > end) report(`inverted (${what})`, `[${start},${end})`);
-		if (start < 0) report(`starts before the source (${what})`, `${start}`);
-		if (end > length) {
-			report(`ends past the source (${what})`, `${end - length} past the end`);
-		}
-		const placed = structural !== false;
-		if (
-			placed &&
-			contains &&
-			parent !== null &&
-			(start < parent.start || end > parent.end)
-		) {
-			report(
-				`escapes parent (${what} in ${parent.what})`,
-				`${_relative(parent.start, start, end)} not inside ${_relative(parent.start, parent.start, parent.end)}`
-			);
-		}
-		if (placed && siblings && after !== -1 && start < after) {
-			report(
-				`overlaps an earlier sibling (${what})`,
-				`${_relative(start, start, end)} starts ${after - start} before that sibling ended`
-			);
-		}
-		if (inner === undefined) return;
-		for (const [name, innerStart, innerEnd] of inner) {
-			// `-1` is the node saying it has no such sub-range, which is not a
-			// range that fails to sit inside it.
-			if (innerStart === -1) continue;
-			if (innerStart > innerEnd || innerStart < start || innerEnd > end) {
-				report(
-					`${name} outside its node (${what})`,
-					`${_relative(start, innerStart, innerEnd)} not inside ${_relative(start, start, end)}`
-				);
-			}
-		}
-	});
-	return reports;
-};
-
-/**
- * Turn a walk over one of webpack's accessor-based parsers into span nodes.
- *
- * WHY: neither a node's own range nor a ref to it is final while the walk is
- * inside it. Both parsers stream — an `@layer` rule is entered holding only its
- * six-byte prelude and has its end set once the body is read — and both recycle
- * refs per top-level node, so a range read on the way in, or read back through
- * a retained ref, is whatever was known at the time. Every range is therefore
- * read on the way out, and a node is held to its parent when the parent leaves,
- * which is the first moment both are settled.
- * @template P
- * @param {object} options how to drive that parser
- * @param {number} options.length the source's length
- * @param {(enter: (path: P) => void, exit: (path: P) => void) => void} options.run registers the pair for every node type and runs the walk
- * @param {(path: P) => string} options.name what to call the current node in a report
- * @param {(path: P) => readonly [string, number, number][] | undefined} options.inner the sub-ranges the current node states
- * @param {(path: P) => number} options.start the current node's start
- * @param {(path: P) => number} options.end its end
- * @param {((path: P) => boolean)=} options.structural whether the walk places this node in the tree (default: every node)
- * @returns {(visit: (node: SpanNode) => void) => void} the walk `spans` reads
- */
-const pathSpanWalk =
-	({ length, run, name, inner, start, end, structural = () => true }) =>
-	(visit) => {
-		/**
-		 * @typedef {object} SpanFrame
-		 * @property {string} what what to call it
-		 * @property {number} start its start, once it has left
-		 * @property {number} end its end, once it has left
-		 * @property {readonly [string, number, number][] | undefined} inner its sub-ranges
-		 * @property {boolean} placed whether the walk put it where it belongs
-		 * @property {SpanFrame[]} children what it held, each settled
-		 */
-		/** @type {SpanFrame} */
-		const root = {
-			what: "source",
-			start: 0,
-			end: length,
-			inner: undefined,
-			placed: true,
-			children: []
-		};
-		/** @type {SpanFrame[]} */
-		const stack = [root];
-		/**
-		 * Hand one settled node's children over, each against the node and against
-		 * how far the ones before it reached.
-		 * @param {SpanFrame} frame the node they sat in
-		 * @returns {void}
-		 */
-		const emit = (frame) => {
-			let reached = -1;
-			// WHY: source order, not visit order — CSS consumes a block into
-			// separate declaration and child-rule lists (§5.4.2), so a rule written
-			// between two declarations is walked after both. What is owed is that
-			// two siblings' ranges do not overlap, never the order they arrive in.
-			frame.children.sort((a, b) => a.start - b.start || a.end - b.end);
-			for (const child of frame.children) {
-				visit({
-					what: child.what,
-					start: child.start,
-					end: child.end,
-					parent: { what: frame.what, start: frame.start, end: frame.end },
-					after: reached,
-					structural: child.placed,
-					inner: child.inner
-				});
-				// A node the walk never placed says nothing about how far its
-				// siblings reach, so it does not move the mark either.
-				if (child.placed) reached = Math.max(reached, child.end);
-			}
-			// Held no longer than they are read: a document is one walk, and keeping
-			// every node's children would retain the whole tree a second time.
-			frame.children.length = 0;
-		};
-		run(
-			(path) => {
-				stack.push({
-					what: name(path),
-					start: 0,
-					end: 0,
-					inner: undefined,
-					placed: true,
-					children: []
-				});
-			},
-			(path) => {
-				// A walk that exits more than it entered would pop the root and read
-				// every node after it against nothing.
-				if (stack.length === 1) return;
-				const frame = /** @type {SpanFrame} */ (stack.pop());
-				frame.start = start(path);
-				frame.end = end(path);
-				frame.inner = inner(path);
-				frame.placed = structural(path);
-				stack[stack.length - 1].children.push(frame);
-				emit(frame);
-			}
-		);
-		emit(root);
-	};
-
-/**
- * One node to hold to its own source. `said` is the subtree digested as it
- * stands, which has to be read while the tree it came from is still current;
- * `reparse` digests what the node's own bytes parse to on their own, and
- * answers null where the parser will not take them out of context.
- * @typedef {{ what: string, said: string, reparse: () => string | null }} SliceCandidate
- */
-
-/**
- * Whether a node's own source says what the node does: the bytes between its
- * offsets, parsed on their own, give that node back.
- *
- * WHY: the candidates are collected before any of them is reparsed, and each
- * carries its digest rather than a way to compute one. Every parser here keeps
- * one set of node columns, so a reparse in the middle of a walk pulls the tree
- * out from under it — it crashed in `_walkRule` rather than reporting anything.
- *
- * A node the parser refuses out of context is skipped rather than reported:
- * `await x` outside an async function, a `<td>` outside its table. What each
- * language can normalize it does first — HTML reparses in the node's own
- * insertion mode, handing its parent to the fragment parsing algorithm — so
- * what is skipped is what no context would settle.
- * @param {Iterable<SliceCandidate>} candidates every node worth slicing, already digested
- * @returns {{ reports: Report[], read: number, skipped: number }} what broke, and how many answered
- */
-const sliceRelation = (candidates) => {
-	/** @type {Report[]} */
-	const reports = [];
-	let read = 0;
-	let skipped = 0;
-	for (const candidate of candidates) {
-		const again = candidate.reparse();
-		if (again === null) {
-			skipped++;
-			continue;
-		}
-		read++;
-		if (again === candidate.said) continue;
-		reports.push({
-			relation: "slices",
-			what: `parses to something else on its own (${candidate.what})`,
-			repro: `    ${candidate.said}\n      -> ${again}`
-		});
-	}
-	return { reports, read, skipped };
-};
-
-/**
- * An incremental digest, so a source's whole tree never has to be held as one
- * string to be compared with another run of it.
- * @returns {{ update: (text: string) => void, hex: () => string }} the digest
- */
-const hasher = () => {
-	const hash = createHash("sha256");
-	return {
-		update: (text) => {
-			hash.update(text);
-		},
-		hex: () => hash.digest("hex")
-	};
-};
-
-/**
- * One source to parse more than once. `digest` has to carry what the parse
- * derived and not only where it read — an interned name or a cached word is
- * exactly what a second parse can get wrong while every offset stays right.
- * @typedef {{ what: string, digest: () => string }} PuritySource
- */
-
-/**
- * Whether a parser carries nothing from one source into the next: reading the
- * same bytes again gives the same answer.
- *
- * Every source is read once before any is read a second time, so what sits
- * between a source's two readings is every other source — which is the shape a
- * build has, and the one a cache keyed on the last input gets wrong. A source
- * that disagrees is read a third time back to back, which says which of the two
- * it is: state another parse left, or a parse that is not even repeatable.
- * @param {readonly PuritySource[]} sources every source, each read twice
- * @returns {{ reports: Report[], read: number }} what disagreed, and how many were read
- */
-const purityRelation = (sources) => {
-	const first = sources.map((source) => source.digest());
-	/** @type {Report[]} */
-	const reports = [];
-	for (let index = 0; index < sources.length; index++) {
-		const again = sources[index].digest();
-		if (again === first[index]) continue;
-		const third = sources[index].digest();
-		reports.push({
-			relation: "purity",
-			what:
-				third === again
-					? "reads differently once something else has been read"
-					: "reads differently every time",
-			repro: `    ${sources[index].what}`
-		});
-	}
-	return { reports, read: sources.length };
 };
 
 /**
@@ -1296,31 +1012,6 @@ const _covers = (expected, report, sources) => {
 		if (!_names(expected, source)) return false;
 	}
 	return true;
-};
-
-/**
- * The source cut short just inside the first of each construct past its
- * midpoint, or the first anywhere when none lies past it: the end of the input
- * is where the tokenizer closes what the source left open.
- * @param {string} source a document
- * @param {readonly [string, RegExp][]} patterns each construct, global, ending where its cut lands
- * @returns {[string, string][]} `[where, cut]` for each construct it holds
- */
-const cutsAt = (source, patterns) => {
-	/** @type {[string, string][]} */
-	const cuts = [];
-	for (const [where, pattern] of patterns) {
-		pattern.lastIndex = source.length >> 1;
-		let match = pattern.exec(source);
-		if (match === null) {
-			pattern.lastIndex = 0;
-			match = pattern.exec(source);
-		}
-		if (match === null) continue;
-		const at = match.index + match[0].length;
-		if (at < source.length) cuts.push([where, source.slice(0, at)]);
-	}
-	return cuts;
 };
 
 const RESPELLING = "respelling ";
@@ -1441,7 +1132,7 @@ const findingGroups = (expected = []) => {
 
 /**
  * Every file of one extension below a directory, skipping the directories a
- * sweep has no business walking.
+ * sweep has no business walking and the `temp-*` ones tests create and delete.
  * @param {string} dir directory to walk
  * @param {string} extension file extension including the dot
  * @param {Set<string>} skipped directory names to leave alone
@@ -1455,9 +1146,31 @@ const collectFiles = (dir, extension, skipped) => {
 	 * @returns {void}
 	 */
 	const walk = (current) => {
-		for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
+		/** @type {fs.Dirent[] | undefined} */
+		let entries;
+		while (entries === undefined) {
+			try {
+				entries = fs.readdirSync(current, { withFileTypes: true });
+			} catch (err) {
+				const { code, path: missing } = /** @type {NodeJS.ErrnoException} */ (
+					err
+				);
+				if (code !== "ENOENT" || missing === undefined) throw err;
+				// A test running beside the sweep may remove a scratch directory after
+				// the listing that named it, or a child this listing stats; a child gone
+				// is read past by listing again, and only the root has to be there.
+				if (missing === current) {
+					if (current === dir) throw err;
+					return;
+				}
+			}
+		}
+		for (const entry of entries) {
 			if (entry.isDirectory()) {
-				if (skipped.has(entry.name)) continue;
+				// A test running beside the sweep may delete its scratch one mid-walk.
+				if (skipped.has(entry.name) || entry.name.startsWith("temp-")) {
+					continue;
+				}
 				walk(path.join(current, entry.name));
 			} else if (entry.name.endsWith(extension)) {
 				files.push(path.join(current, entry.name));
@@ -1545,7 +1258,7 @@ module.exports = {
 	sweepExitCode,
 	sweepMode,
 	thrownText,
-	treeDifference,
+	treeDifferences,
 	wantedExpectations,
 	wantedRespelling
 };

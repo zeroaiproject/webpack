@@ -2,4 +2,4 @@
 "webpack": minor
 ---
 
-Add `parseErrors`, `parseProgram`, and CommonJS and event handler `sourceType`.
+Add `parseErrors` and every `ecmaVersion`; remove `JavascriptParser.extend`.

@@ -117,3 +117,29 @@ it("should take `@value` and `composes` in an scss module", () => {
 	);
 	expect(page).toMatch(/\.m_scssValue \{ color: purple; width: 6px; \}/);
 });
+
+it("should leave a `@keyframes` name, which is not a class", () => {
+	expect(tagOf("a @keyframes name is not a class")).toBe(
+		'<p class="spin m_spinning">'
+	);
+	expect(sheet).toMatch(/@keyframes m_spin/);
+});
+
+it("should split a class list on ASCII whitespace only and match an id whole", () => {
+	expect(tagOf("a no-break space is part of a name")).toBe(
+		'<p class="local&nbsp;x" id="&nbsp;anchor">'
+	);
+});
+
+it("should quote an unquoted value a scoped name makes unsafe", () => {
+	expect(tagOf("an unquoted value a name makes unsafe")).toBe(
+		'<p class="m_a>b">'
+	);
+});
+
+it("should leave no name of a script tag the page drops", () => {
+	// Consecutive inline scripts share one chunk: the first tag stays, scoped,
+	// and the second goes with its `class`.
+	const scripts = body.slice(body.indexOf("<script"), body.indexOf("</body>"));
+	expect(scripts.trim()).toBe('<script src="page.js" class="m_local"></script>');
+});

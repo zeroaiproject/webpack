@@ -10936,6 +10936,70 @@ Object {
     "multiple": true,
     "simpleType": "string",
   },
+  "module-rules-use-source-test": Object {
+    "configs": Array [
+      Object {
+        "description": "Run the loader's normal function only when its current input matches this condition, the same kind of condition 'test' takes. Input that is not valid UTF-8 text always runs it.",
+        "multiple": true,
+        "path": "module.rules[].use.sourceTest",
+        "type": "RegExp",
+      },
+      Object {
+        "description": "Run the loader's normal function only when its current input matches this condition, the same kind of condition 'test' takes. Input that is not valid UTF-8 text always runs it.",
+        "multiple": true,
+        "path": "module.rules[].use.sourceTest",
+        "type": "string",
+      },
+    ],
+    "description": "Run the loader's normal function only when its current input matches this condition, the same kind of condition 'test' takes. Input that is not valid UTF-8 text always runs it.",
+    "multiple": true,
+    "simpleType": "string",
+  },
+  "module-rules-use-source-test-glob": Object {
+    "configs": Array [
+      Object {
+        "description": "A glob pattern matched against a path, using \`/\` as path separator on every OS; a \`!\` prefix excludes what it matches.",
+        "multiple": true,
+        "path": "module.rules[].use.sourceTest.glob",
+        "type": "string",
+      },
+    ],
+    "description": "A glob pattern matched against a path, using \`/\` as path separator on every OS; a \`!\` prefix excludes what it matches.",
+    "multiple": true,
+    "simpleType": "string",
+  },
+  "module-rules-use-source-test-not": Object {
+    "configs": Array [
+      Object {
+        "description": "Logical NOT.",
+        "multiple": true,
+        "path": "module.rules[].use.sourceTest.not",
+        "type": "RegExp",
+      },
+      Object {
+        "description": "Logical NOT.",
+        "multiple": true,
+        "path": "module.rules[].use.sourceTest.not",
+        "type": "string",
+      },
+    ],
+    "description": "Logical NOT.",
+    "multiple": true,
+    "simpleType": "string",
+  },
+  "module-rules-use-source-test-not-glob": Object {
+    "configs": Array [
+      Object {
+        "description": "A glob pattern matched against a path, using \`/\` as path separator on every OS; a \`!\` prefix excludes what it matches.",
+        "multiple": true,
+        "path": "module.rules[].use.sourceTest.not.glob",
+        "type": "string",
+      },
+    ],
+    "description": "A glob pattern matched against a path, using \`/\` as path separator on every OS; a \`!\` prefix excludes what it matches.",
+    "multiple": true,
+    "simpleType": "string",
+  },
   "module-strict-export-presence": Object {
     "configs": Array [
       Object {
@@ -12070,7 +12134,7 @@ Object {
   "optimization-minimize-html-remove-redundant-attributes": Object {
     "configs": Array [
       Object {
-        "description": "Drop an attribute whose value is the one the element already defaults to. Off by default: an attribute a page no longer carries is one \`getAttribute\` and every attribute selector read differently, whichever tier dropped it. \`true\` (or \`\\"smart\\"\`) drops only markers on elements that render nothing — \`<script type=text/javascript>\`, \`<script language=javascript>\`, \`<script charset=utf-8>\`, \`<style type=text/css>\`, \`<link type=text/css>\`, \`<link media=all>\` — so no rule that styles the page stops applying, which is what \`@swc/html\` does by default. \`\\"all\\"\` also drops spec defaults such as \`<input type=text>\` and \`<form method=get>\`, which reaches further still: an attribute selector matches the content attribute, not the reflected default, so \`input[type=text]\` stops matching.",
+        "description": "Drop an attribute whose value is the one the element already defaults to. Off by default: an attribute a page no longer carries is one \`getAttribute\` and every attribute selector read differently, whichever tier dropped it. \`true\` (or \`\\"smart\\"\`) drops only markers on elements that render nothing — \`<script type=text/javascript>\`, \`<script language=javascript>\`, \`<script charset=utf-8>\` on a page that declares UTF-8, \`<style type=text/css>\`, \`<link type=text/css>\`, \`<link media=all>\` — so no rule that styles the page stops applying, which is what \`@swc/html\` does by default. \`\\"all\\"\` also drops spec defaults such as \`<input type=text>\` and \`<form method=get>\`, which reaches further still: an attribute selector matches the content attribute, not the reflected default, so \`input[type=text]\` stops matching.",
         "multiple": false,
         "path": "optimization.minimize.html.removeRedundantAttributes",
         "type": "enum",
@@ -12080,13 +12144,13 @@ Object {
         ],
       },
       Object {
-        "description": "Drop an attribute whose value is the one the element already defaults to. Off by default: an attribute a page no longer carries is one \`getAttribute\` and every attribute selector read differently, whichever tier dropped it. \`true\` (or \`\\"smart\\"\`) drops only markers on elements that render nothing — \`<script type=text/javascript>\`, \`<script language=javascript>\`, \`<script charset=utf-8>\`, \`<style type=text/css>\`, \`<link type=text/css>\`, \`<link media=all>\` — so no rule that styles the page stops applying, which is what \`@swc/html\` does by default. \`\\"all\\"\` also drops spec defaults such as \`<input type=text>\` and \`<form method=get>\`, which reaches further still: an attribute selector matches the content attribute, not the reflected default, so \`input[type=text]\` stops matching.",
+        "description": "Drop an attribute whose value is the one the element already defaults to. Off by default: an attribute a page no longer carries is one \`getAttribute\` and every attribute selector read differently, whichever tier dropped it. \`true\` (or \`\\"smart\\"\`) drops only markers on elements that render nothing — \`<script type=text/javascript>\`, \`<script language=javascript>\`, \`<script charset=utf-8>\` on a page that declares UTF-8, \`<style type=text/css>\`, \`<link type=text/css>\`, \`<link media=all>\` — so no rule that styles the page stops applying, which is what \`@swc/html\` does by default. \`\\"all\\"\` also drops spec defaults such as \`<input type=text>\` and \`<form method=get>\`, which reaches further still: an attribute selector matches the content attribute, not the reflected default, so \`input[type=text]\` stops matching.",
         "multiple": false,
         "path": "optimization.minimize.html.removeRedundantAttributes",
         "type": "boolean",
       },
     ],
-    "description": "Drop an attribute whose value is the one the element already defaults to. Off by default: an attribute a page no longer carries is one \`getAttribute\` and every attribute selector read differently, whichever tier dropped it. \`true\` (or \`\\"smart\\"\`) drops only markers on elements that render nothing — \`<script type=text/javascript>\`, \`<script language=javascript>\`, \`<script charset=utf-8>\`, \`<style type=text/css>\`, \`<link type=text/css>\`, \`<link media=all>\` — so no rule that styles the page stops applying, which is what \`@swc/html\` does by default. \`\\"all\\"\` also drops spec defaults such as \`<input type=text>\` and \`<form method=get>\`, which reaches further still: an attribute selector matches the content attribute, not the reflected default, so \`input[type=text]\` stops matching.",
+    "description": "Drop an attribute whose value is the one the element already defaults to. Off by default: an attribute a page no longer carries is one \`getAttribute\` and every attribute selector read differently, whichever tier dropped it. \`true\` (or \`\\"smart\\"\`) drops only markers on elements that render nothing — \`<script type=text/javascript>\`, \`<script language=javascript>\`, \`<script charset=utf-8>\` on a page that declares UTF-8, \`<style type=text/css>\`, \`<link type=text/css>\`, \`<link media=all>\` — so no rule that styles the page stops applying, which is what \`@swc/html\` does by default. \`\\"all\\"\` also drops spec defaults such as \`<input type=text>\` and \`<form method=get>\`, which reaches further still: an attribute selector matches the content attribute, not the reflected default, so \`input[type=text]\` stops matching.",
     "multiple": false,
     "simpleType": "string",
   },
@@ -12867,7 +12931,7 @@ Object {
   "optimization-minimize-options-html-remove-redundant-attributes": Object {
     "configs": Array [
       Object {
-        "description": "Drop an attribute whose value is the one the element already defaults to. Off by default: an attribute a page no longer carries is one \`getAttribute\` and every attribute selector read differently, whichever tier dropped it. \`true\` (or \`\\"smart\\"\`) drops only markers on elements that render nothing — \`<script type=text/javascript>\`, \`<script language=javascript>\`, \`<script charset=utf-8>\`, \`<style type=text/css>\`, \`<link type=text/css>\`, \`<link media=all>\` — so no rule that styles the page stops applying, which is what \`@swc/html\` does by default. \`\\"all\\"\` also drops spec defaults such as \`<input type=text>\` and \`<form method=get>\`, which reaches further still: an attribute selector matches the content attribute, not the reflected default, so \`input[type=text]\` stops matching.",
+        "description": "Drop an attribute whose value is the one the element already defaults to. Off by default: an attribute a page no longer carries is one \`getAttribute\` and every attribute selector read differently, whichever tier dropped it. \`true\` (or \`\\"smart\\"\`) drops only markers on elements that render nothing — \`<script type=text/javascript>\`, \`<script language=javascript>\`, \`<script charset=utf-8>\` on a page that declares UTF-8, \`<style type=text/css>\`, \`<link type=text/css>\`, \`<link media=all>\` — so no rule that styles the page stops applying, which is what \`@swc/html\` does by default. \`\\"all\\"\` also drops spec defaults such as \`<input type=text>\` and \`<form method=get>\`, which reaches further still: an attribute selector matches the content attribute, not the reflected default, so \`input[type=text]\` stops matching.",
         "multiple": false,
         "path": "optimization.minimizeOptions.html.removeRedundantAttributes",
         "type": "enum",
@@ -12877,13 +12941,13 @@ Object {
         ],
       },
       Object {
-        "description": "Drop an attribute whose value is the one the element already defaults to. Off by default: an attribute a page no longer carries is one \`getAttribute\` and every attribute selector read differently, whichever tier dropped it. \`true\` (or \`\\"smart\\"\`) drops only markers on elements that render nothing — \`<script type=text/javascript>\`, \`<script language=javascript>\`, \`<script charset=utf-8>\`, \`<style type=text/css>\`, \`<link type=text/css>\`, \`<link media=all>\` — so no rule that styles the page stops applying, which is what \`@swc/html\` does by default. \`\\"all\\"\` also drops spec defaults such as \`<input type=text>\` and \`<form method=get>\`, which reaches further still: an attribute selector matches the content attribute, not the reflected default, so \`input[type=text]\` stops matching.",
+        "description": "Drop an attribute whose value is the one the element already defaults to. Off by default: an attribute a page no longer carries is one \`getAttribute\` and every attribute selector read differently, whichever tier dropped it. \`true\` (or \`\\"smart\\"\`) drops only markers on elements that render nothing — \`<script type=text/javascript>\`, \`<script language=javascript>\`, \`<script charset=utf-8>\` on a page that declares UTF-8, \`<style type=text/css>\`, \`<link type=text/css>\`, \`<link media=all>\` — so no rule that styles the page stops applying, which is what \`@swc/html\` does by default. \`\\"all\\"\` also drops spec defaults such as \`<input type=text>\` and \`<form method=get>\`, which reaches further still: an attribute selector matches the content attribute, not the reflected default, so \`input[type=text]\` stops matching.",
         "multiple": false,
         "path": "optimization.minimizeOptions.html.removeRedundantAttributes",
         "type": "boolean",
       },
     ],
-    "description": "Drop an attribute whose value is the one the element already defaults to. Off by default: an attribute a page no longer carries is one \`getAttribute\` and every attribute selector read differently, whichever tier dropped it. \`true\` (or \`\\"smart\\"\`) drops only markers on elements that render nothing — \`<script type=text/javascript>\`, \`<script language=javascript>\`, \`<script charset=utf-8>\`, \`<style type=text/css>\`, \`<link type=text/css>\`, \`<link media=all>\` — so no rule that styles the page stops applying, which is what \`@swc/html\` does by default. \`\\"all\\"\` also drops spec defaults such as \`<input type=text>\` and \`<form method=get>\`, which reaches further still: an attribute selector matches the content attribute, not the reflected default, so \`input[type=text]\` stops matching.",
+    "description": "Drop an attribute whose value is the one the element already defaults to. Off by default: an attribute a page no longer carries is one \`getAttribute\` and every attribute selector read differently, whichever tier dropped it. \`true\` (or \`\\"smart\\"\`) drops only markers on elements that render nothing — \`<script type=text/javascript>\`, \`<script language=javascript>\`, \`<script charset=utf-8>\` on a page that declares UTF-8, \`<style type=text/css>\`, \`<link type=text/css>\`, \`<link media=all>\` — so no rule that styles the page stops applying, which is what \`@swc/html\` does by default. \`\\"all\\"\` also drops spec defaults such as \`<input type=text>\` and \`<form method=get>\`, which reaches further still: an attribute selector matches the content attribute, not the reflected default, so \`input[type=text]\` stops matching.",
     "multiple": false,
     "simpleType": "string",
   },

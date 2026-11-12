@@ -59,6 +59,24 @@ describe("the HTML tool comparison", () => {
 
 const ROOT = path.join(__dirname, "..", "..", "..");
 
+describe("the fixture walk", () => {
+	it("should skip the `temp-*` directories tests create and delete", () => {
+		const dir = fs.mkdtempSync(path.join(require("os").tmpdir(), "walk-"));
+		try {
+			fs.mkdirSync(path.join(dir, "temp-80"));
+			fs.mkdirSync(path.join(dir, "kept"));
+			fs.writeFileSync(path.join(dir, "temp-80", "a.html"), "");
+			fs.writeFileSync(path.join(dir, "kept", "b.html"), "");
+
+			expect(collectFiles(dir, ".html", new Set())).toEqual([
+				path.join(dir, "kept", "b.html")
+			]);
+		} finally {
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	});
+});
+
 // cspell:ignore popovertarget popovertargetaction contenteditable exportparts
 // cspell:ignore autocapitalize referrerpolicy accesskey writingsuggestions
 
@@ -80,14 +98,14 @@ const COLD = [
 	["loading", "loading="],
 	["is", " is="],
 	["exportparts", "exportparts"],
-	["col", "<col "],
-	["nomodule", "nomodule"]
+	["col", "<col "]
 ];
 
 // What the printer branches on that the corpus does carry, but thinly — kept
 // here so a fixture rewrite cannot quietly drop the whole class.
 const THIN = [
 	["dialog", "<dialog"],
+	["nomodule", "nomodule"],
 	["picture", "<picture"],
 	["ruby", "<ruby"],
 	["progress", "<progress"],
@@ -136,7 +154,10 @@ describe("compare-html-tools — the cold constructs fixture", () => {
 			// What the sweep skips: build output and the conformance suites, which
 			// are not the corpus it reads.
 			new Set(["js", "node_modules", "wpt"])
-		).map((file) => fs.readFileSync(file, "utf8").toLowerCase());
+		)
+			// The unit tests' inputs are fragments, not the pages this one stands in for.
+			.filter((file) => !/[\\/]fixtures[\\/]html[\\/][^\\/]+[\\/]index\.html$/.test(file))
+			.map((file) => fs.readFileSync(file, "utf8").toLowerCase());
 		const reached = COLD.filter(([, probe]) =>
 			others.some((doc) => doc.includes(probe.toLowerCase()))
 		).map(([name]) => name);
@@ -264,7 +285,7 @@ describe("compare-html-tools — agreeing with parse5", () => {
 	const parsed = (id) => ({
 		nodeName: "#document",
 		childNodes: [
-			{ nodeName: "#documentType", name: "html" },
+			{ nodeName: "#documentType", name: "html", publicId: "", systemId: "" },
 			element("html", HTML_NAMESPACE, [
 				element("head", HTML_NAMESPACE, []),
 				element("body", HTML_NAMESPACE, [

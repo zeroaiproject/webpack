@@ -10,6 +10,7 @@ const {
 	TreeEvents,
 	agreement,
 	agreementInvariant,
+	collectFiles,
 	compress,
 	cutsAt,
 	exists,
@@ -17,6 +18,7 @@ const {
 	findingGroups,
 	formatCost,
 	formatProfile,
+	formatSecond,
 	idempotence,
 	installPackages,
 	kb,
@@ -29,9 +31,10 @@ const {
 	missingReport,
 	profileShares,
 	run,
+	shrink,
 	sweepExitCode,
 	sweepMode,
-	treeDifference,
+	treeDifferences,
 	wantedExpectations,
 	wantedRespelling
 } = require("../../../tooling/compare-tools-harness");
@@ -49,6 +52,31 @@ const TOOLS = [
 		create: () => (source) => ({ of: source.length })
 	},
 	{ name: "trims", stage: "minify", create: () => (source) => source.trim() },
+	{
+		// Its first call outlasts the warm-up's time bound on its own.
+		name: "slow",
+		stage: "parse",
+		create: () => {
+			let first = true;
+			return (source) => {
+				if (first) {
+					first = false;
+					const until = Date.now() + 510;
+					while (Date.now() < until);
+				}
+				return source.length;
+			};
+		}
+	},
+	{
+		// Prints its input trimmed, then cannot read back what it printed.
+		name: "picky",
+		stage: "minify",
+		create: () => (source) => {
+			if (source === source.trim()) throw new Error("already trimmed");
+			return source.trim();
+		}
+	},
 	{
 		name: "refuses",
 		stage: "minify",
@@ -142,6 +170,14 @@ describe("compare-tools-harness", () => {
 			);
 		});
 
+		it("gives up on a worker that outlasts its budget", async () => {
+			const file = path.join(directory, `worker${made++}.js`);
+			fs.writeFileSync(file, '"use strict";\nsetInterval(() => {}, 1000);\n');
+			await expect(
+				measureInWorker(file, "parse", "stylis", "a{}", 200)
+			).resolves.toEqual({ error: "timed out after 0.2 s", timedOut: true });
+		});
+
 		it("reports the code a failing worker exited with", async () => {
 			const entry = workerWriting("{}", 3);
 			expect((await rejection(entry)).message).toBe(
@@ -196,6 +232,22 @@ describe("compare-tools-harness", () => {
 			expect(result.peak).toBeGreaterThan(0);
 		});
 
+		it("stops warming up a tool once the time bound is spent", async () => {
+			const result = await measureHere("parse", "slow", "abcd");
+			expect(result.code).toBeUndefined();
+			expect(result.wall).toBeGreaterThanOrEqual(0);
+		});
+
+		it("reports a second pass that throws", async () => {
+			const result = await measureHere("minify", "picky", " a ");
+			expect(result.code).toBe("a");
+			expect(result.second).toEqual({
+				stable: false,
+				delta: 0,
+				error: "already trimmed"
+			});
+		});
+
 		// A parse hands back a tree, which is measured but never reported.
 		it("reports no text for a parse", async () => {
 			const result = await measureHere("parse", "counts", "abcd");
@@ -237,6 +289,36 @@ describe("compare-tools-harness", () => {
 				expect(await measureHere("minify", "tires", "a")).toEqual({
 					error: "tired"
 				});
+			});
+
+			it("reports a profiler that will not stop, unless the run failed first", async () => {
+				const { Session } = require("inspector");
+				const post = Session.prototype.post;
+				const stop = jest.spyOn(Session.prototype, "post").mockImplementation(
+					/** @type {EXPECTED_ANY} */ (
+						function post_(
+							/** @type {string} */ method,
+							/** @type {(error: Error | null) => void} */ callback
+						) {
+							if (method === "Profiler.stop") {
+								callback(new Error("cannot stop"));
+								return;
+							}
+							// @ts-expect-error this is the session the harness posts to
+							post.call(this, method, callback);
+						}
+					)
+				);
+				try {
+					expect(await measureHere("minify", "trims", " a ")).toEqual({
+						error: "cannot stop"
+					});
+					expect(await measureHere("minify", "tires", "a")).toEqual({
+						error: "tired"
+					});
+				} finally {
+					stop.mockRestore();
+				}
 			});
 		});
 
@@ -313,6 +395,20 @@ describe("compare-tools-harness", () => {
 			expect(sizes.brotli).toBeLessThan(sizes.raw);
 			// zlib carries zstd only from Node 22.15, where the column reads "-".
 			expect(sizes.zstd === undefined || sizes.zstd < sizes.raw).toBe(true);
+		});
+
+		it("weighs no zstd size where zlib has no zstd", async () => {
+			/** @type {EXPECTED_ANY} */
+			let isolated;
+			jest.isolateModules(() => {
+				jest.doMock("zlib", () => ({
+					...jest.requireActual("zlib"),
+					zstdCompress: undefined
+				}));
+				isolated = require("../../../tooling/compare-tools-harness");
+			});
+			jest.unmock("zlib");
+			expect((await isolated.compress(Buffer.from("a"))).zstd).toBeUndefined();
 		});
 
 		it("prints a count in KB, and a dash for one it cannot have", () => {
@@ -663,6 +759,20 @@ describe("compare-tools-harness", () => {
 			).toBe("differs, +1 B");
 		});
 
+		it("reports a first print that throws", () => {
+			const { printed, reports } = idempotence({
+				minify: () => {
+					throw new Error("cannot print it");
+				},
+				source: "a",
+				says
+			});
+			expect(printed).toBeNull();
+			expect(reports).toEqual([
+				{ relation: "minify", what: "threw", repro: "    cannot print it" }
+			]);
+		});
+
 		it("reports a second print that throws", () => {
 			const reprint = () => {
 				throw new Error("cannot read it back");
@@ -676,6 +786,44 @@ describe("compare-tools-harness", () => {
 			expect(printed).toBe("a");
 			expect(reports[0].relation).toBe("idempotence");
 			expect(reports[0].what).toBe("threw");
+		});
+	});
+
+	describe("formatSecond", () => {
+		it("writes each second-pass outcome as its cell", () => {
+			expect(formatSecond(undefined)).toBe("-");
+			expect(
+				formatSecond({ stable: false, delta: 0, error: "x" })
+			).toBe("threw");
+			expect(formatSecond({ stable: true, delta: 0 })).toBe("-");
+			expect(formatSecond({ stable: false, delta: 0 })).toBe("moved");
+			expect(formatSecond({ stable: false, delta: -3 })).toBe("-3 B");
+		});
+	});
+
+	describe("shrink", () => {
+		/**
+		 * @param {number} needed the site a finding needs
+		 * @returns {(sites: number[]) => { kind: string } | null} whether a subset keeps it
+		 */
+		const needs = (needed) => (sites) =>
+			sites.includes(needed) ? { kind: "differs" } : null;
+
+		it("bisects down to the one site a finding needs", () => {
+			expect(shrink(needs(5), [1, 2, 3, 4, 5, 6, 7], "differs")).toEqual([5]);
+			expect(shrink(needs(1), [1, 2, 3, 4], "differs")).toEqual([1]);
+		});
+
+		// Where neither half keeps it on its own, the sites interact.
+		it("keeps every site that only shows it together", () => {
+			const both = (/** @type {number[]} */ sites) =>
+				sites.includes(1) && sites.includes(4) ? { kind: "differs" } : null;
+			expect(shrink(both, [1, 2, 3, 4], "differs")).toEqual([1, 2, 3, 4]);
+		});
+
+		it("does not settle for a half that shows another kind", () => {
+			const other = () => ({ kind: "bytes" });
+			expect(shrink(other, [1, 2], "differs")).toEqual([1, 2]);
 		});
 	});
 
@@ -750,7 +898,7 @@ describe("compare-tools-harness", () => {
 		/**
 		 * @param {string} relation what the finding is about
 		 * @param {string} repro the lines reproducing it
-		 * @returns {import("../../../tooling/compare-tools-harness").Report} the finding
+		 * @returns {import("../../helpers/syntaxInvariants/relations").Report} the finding
 		 */
 		const finding = (relation, repro) => ({ relation, what: "bytes", repro });
 
@@ -1089,28 +1237,52 @@ describe("parser agreement", () => {
 		]);
 	});
 
-	it("names the first event two trees differ at, and what each side says there", () => {
+	it("names each place two trees differ, and what each side says there", () => {
 		expect(
-			treeDifference(paragraphs(["a", "b"]), paragraphs(["a", "b"]), "ref")
-		).toBeUndefined();
+			treeDifferences(paragraphs(["a", "b"]), paragraphs(["a", "b"]), "ref")
+		).toEqual([]);
 		expect(
-			treeDifference(paragraphs(["a", "b"]), paragraphs(["a", "c"]), "ref")
-		).toBe('/body[1]/p[2]: ref text "b", tool text "c"');
+			treeDifferences(paragraphs(["a", "b"]), paragraphs(["a", "c"]), "ref")
+		).toEqual(['/body[1]/p[2]: ref text "b", tool text "c"']);
+		// A run of closes alone, as an unbalanced reader leaves, names its first.
+		const balanced = /** @type {EXPECTED_ANY} */ ({
+			list: [
+				["/a[1]", "open", "a"],
+				["/a[1]", "close", "}"]
+			]
+		});
+		const closedTwice = /** @type {EXPECTED_ANY} */ ({
+			list: [...balanced.list, ["/a[1]", "close", "}"]]
+		});
+		expect(treeDifferences(balanced, closedTwice, "ref")).toEqual([
+			"/a[1]: ref nothing, tool }"
+		]);
+		// A node one side lacks is one difference, not one per node after it.
 		expect(
-			treeDifference(paragraphs(["a"]), paragraphs(["a", "b"]), "ref")
-		).toBe("/body[1]: ref comment, tool <p>");
+			treeDifferences(paragraphs(["a", "c"]), paragraphs(["a", "b", "c"]), "ref")
+		).toEqual(['/body[1]/p[2]: ref nothing, tool text "b"']);
+		expect(
+			treeDifferences(
+				paragraphs(["x", "a", "b", "y"]),
+				paragraphs(["z", "a", "b"]),
+				"ref"
+			)
+		).toEqual([
+			'/body[1]/p[1]: ref text "x", tool text "z"',
+			"/body[1]/p[4]: ref <p>, tool nothing"
+		]);
 		const empty = new TreeEvents();
-		expect(treeDifference(empty, paragraphs([]), "ref")).toBe(
+		expect(treeDifferences(empty, paragraphs([]), "ref")).toEqual([
 			"/body[1]: ref nothing, tool <body>"
-		);
+		]);
 		const loose = new TreeEvents();
 		loose.leaf("comment");
-		expect(treeDifference(loose, empty, "ref")).toBe(
+		expect(treeDifferences(loose, empty, "ref")).toEqual([
 			"/: ref comment, tool nothing"
-		);
+		]);
 		expect(
-			treeDifference(paragraphs(["x".repeat(80)]), paragraphs(["y"]), "ref")
-		).toBe(`/body[1]/p[1]: ref text "${"x".repeat(41)}…, tool text "y"`);
+			treeDifferences(paragraphs(["x".repeat(80)]), paragraphs(["y"]), "ref")
+		).toEqual([`/body[1]/p[1]: ref text "${"x".repeat(41)}…, tool text "y"`]);
 		/**
 		 * @param {string} said what the innermost node says
 		 * @returns {TreeEvents} it under twenty nested sections
@@ -1121,18 +1293,31 @@ describe("parser agreement", () => {
 			events.leaf(said);
 			return events;
 		};
-		expect(treeDifference(deep("a"), deep("b"), "ref")).toBe(
+		expect(treeDifferences(deep("a"), deep("b"), "ref")).toEqual([
 			`…${"/section[1]".repeat(20).slice(-59)}: ref a, tool b`
-		);
+		]);
 		// Two sides alike past the cut are shown from just before they differ.
 		const long = (/** @type {string} */ tail) => {
 			const events = new TreeEvents();
 			events.leaf(`<path d="${"m0 0".repeat(20)}${tail}">`);
 			return events;
 		};
-		expect(treeDifference(long("h1"), long("v1"), "ref")).toBe(
+		expect(treeDifferences(long("h1"), long("v1"), "ref")).toEqual([
 			'/: ref …m0 0m0 0m0 0h1">, tool …m0 0m0 0m0 0v1">'
-		);
+		]);
+	});
+
+	it("reports trees too far apart to align as one difference", () => {
+		const texts = Array.from({ length: 300 }, (_, i) => `${i}`);
+		expect(
+			treeDifferences(
+				paragraphs(texts),
+				paragraphs(texts.map((text) => `${text}!`)),
+				"ref"
+			)
+		).toEqual([
+			'/body[1]/p[1]: ref text "0", tool text "0!", and too many more to align'
+		]);
 	});
 
 	it("answers each parser's cell, reading the reference once", async () => {
@@ -1144,7 +1329,7 @@ describe("parser agreement", () => {
 			/** @type {[string, TreeReader][]} */ ([
 			["ref", reference],
 			["same", (source) => Promise.resolve(paragraphs(source.split(" ")))],
-			["other", () => paragraphs(["no"])],
+			["other", () => paragraphs(["no", "b", "x"])],
 			[
 				"throws",
 				() => {
@@ -1158,7 +1343,7 @@ describe("parser agreement", () => {
 		expect(await cell("unread")).toBe("own dialect");
 		expect(await cell("same")).toBe("yes");
 		expect(await cell("other")).toBe(
-			'no — /body[1]/p[1]: ref text "a", tool text "no"'
+			'no — /body[1]/p[1]: ref text "a", tool text "no" (and 1 more)'
 		);
 		expect(await cell("throws")).toBe("could not compare: bad input");
 		expect(reference).toHaveBeenCalledTimes(1);
@@ -1239,6 +1424,32 @@ describe("agreementInvariant", () => {
 		]);
 	});
 
+	it("reports each difference in a source as its own finding", () => {
+		/** @type {string[]} */
+		const reproductions = [];
+		agreementInvariant({
+			wanted: true,
+			referenceName: "ref",
+			reference: () => () => {
+				const events = paragraph("a");
+				events.leaf("comment");
+				return events;
+			},
+			tree: () => {
+				const events = paragraph("b");
+				events.leaf("other");
+				return events;
+			},
+			corpus: [["twice", ""]],
+			expected: [],
+			missing: []
+		}).hold({ add: (report) => reproductions.push(report.repro) });
+		expect(reproductions).toEqual([
+			'    /p[1]: ref text "a", tool text "b"',
+			"    /: ref comment, tool other"
+		]);
+	});
+
 	it("names a reference that is not installed as missing, and sets its expectations aside", () => {
 		const { missing, held, reports } = sweep(true, () => {
 			throw new Error("Cannot find module");
@@ -1255,5 +1466,67 @@ describe("agreementInvariant", () => {
 		expect(missing).toEqual([]);
 		expect(held.expected).toEqual([expected[1]]);
 		expect(reports).toEqual([]);
+	});
+});
+
+describe("collectFiles", () => {
+	it("walks past a directory removed after the listing named it", () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "collect-files-"));
+		fs.mkdirSync(path.join(root, "kept"));
+		fs.writeFileSync(path.join(root, "kept", "a.css"), "");
+		fs.mkdirSync(path.join(root, "gone"));
+		const readdirSync = fs.readdirSync;
+		const spy = jest
+			.spyOn(fs, "readdirSync")
+			.mockImplementation((current, options) => {
+				if (current === path.join(root, "gone")) {
+					fs.rmdirSync(current);
+				}
+				return readdirSync(current, options);
+			});
+		try {
+			expect(collectFiles(root, ".css", new Set())).toEqual([
+				path.join(root, "kept", "a.css")
+			]);
+			expect(() =>
+				collectFiles(path.join(root, "missing"), ".css", new Set())
+			).toThrow(/ENOENT/);
+		} finally {
+			spy.mockRestore();
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("lists a directory again when a child it stats is removed", () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "collect-files-"));
+		fs.writeFileSync(path.join(root, "a.css"), "");
+		fs.writeFileSync(path.join(root, "b.css"), "");
+		const readdirSync = fs.readdirSync;
+		let thrown = false;
+		const spy = jest
+			.spyOn(fs, "readdirSync")
+			.mockImplementation((current, options) => {
+				if (!thrown) {
+					thrown = true;
+					fs.writeFileSync(path.join(root, "c.css"), "");
+					throw Object.assign(new Error("ENOENT: vanished"), {
+						code: "ENOENT",
+						path: path.join(root, "vanished.css")
+					});
+				}
+				return readdirSync(current, options);
+			});
+		try {
+			expect(collectFiles(root, ".css", new Set())).toEqual(
+				["a.css", "b.css", "c.css"].map((name) => path.join(root, name))
+			);
+			spy.mockImplementation(() => {
+				throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+			});
+			expect(() => collectFiles(root, ".css", new Set())).toThrow(/ENOENT/);
+		} finally {
+			spy.mockRestore();
+			fs.rmSync(root, { recursive: true, force: true });
+		}
 	});
 });

@@ -1,8 +1,12 @@
 "use strict";
 
+const { fixture } = require("../../helpers/fixture");
+
+// Each fixture's tokens are in `invariants.unittest.js`'s snapshot; these hold
+// the token object, the stream, the helpers and what no fixture can hold.
+
 const fs = require("fs");
 const path = require("path");
-const { SourceProcessor } = require("../../../lib/css/syntax");
 const {
 	A,
 	NodeType,
@@ -11,18 +15,6 @@ const {
 	TokenStream,
 	TokenType
 } = require("../../../lib/css/syntax-parser");
-
-/**
- * @param {string} css a stylesheet
- * @param {string[]=} browsers the browserslist selection to target
- * @param {import("../../../lib/css/syntax-parser").CssEnvironment=} abilities the CSS abilities the target reads
- * @returns {string} its minified serialization
- */
-const minifyFor = (css, browsers, abilities) =>
-	new SourceProcessor().process(css, {
-		mode: "minify",
-		environment: browsers ? { ...abilities, browsers } : abilities
-	}).code;
 
 // Snapshot uses the spec-style kebab-case names for multi-word token types;
 // the tokenizer emits numeric `TokenType` values. Map between them so the existing
@@ -101,27 +93,6 @@ describe("readToken", () => {
 	}
 });
 
-/**
- * @param {string} input CSS source
- * @returns {string} input reconstructed from token source slices
- */
-const tokenRoundtrip = (input) => {
-	let out = "";
-	for (let pos = 0; ;) {
-		const t = readToken(
-			input,
-			pos,
-			/** @type {import("../../../lib/css/syntax-parser").MutableToken} */ ({})
-		);
-		if (t === undefined) break;
-		pos = t.end;
-		out += input.slice(t.start, t.end);
-	}
-	return out;
-};
-
-// Regressions from the css-parsing-tests corpus: each input previously hung
-// the parser or dropped bytes from the token stream.
 describe("CssSyntax — the token the lexer reuses", () => {
 	// The stream writes every token into one instance, so a field added to it is
 	// paid on every parse and a field left out of the constructor splits the
@@ -137,12 +108,12 @@ describe("CssSyntax — the token the lexer reuses", () => {
 	];
 
 	it("carries exactly the fields it was built with", () => {
-		const stream = new TokenStream("a{color:red}");
+		const stream = new TokenStream(fixture("css", "css-syntax-minify-the-value-transforms-rejection-paths-a-named-color-the-14"));
 		expect(Object.keys(stream.next()).sort()).toEqual(FIELDS);
 	});
 
 	it("has every field set before a token is read, and after", () => {
-		const stream = new TokenStream("url(a.png) 1px #ff0");
+		const stream = new TokenStream(fixture("css", "css-syntax-the-token-the-lexer-reuses-has-every-field-set-before-a-token-is-read"));
 		for (const field of FIELDS) {
 			expect(/** @type {EXPECTED_ANY} */ (stream.next())[field]).toBeDefined();
 		}
@@ -156,134 +127,9 @@ describe("CssSyntax — the token the lexer reuses", () => {
 	});
 });
 
-describe("CssSyntax regressions", () => {
-	const NUL = String.fromCharCode(0);
-	const C1 = String.fromCharCode(0x80); // U+0080: an ident-start code point
-
-	it("does not hang on a literal U+0080 ident-start code point", () => {
-		expect(parseAListOfComponentValues(C1, 0, {})).toHaveLength(1);
-		expect(parseAListOfComponentValues(`a${C1}b`, 0, {})).toHaveLength(1);
-	});
-
-	it("does not hang on a backslash at EOF inside a url token", () => {
-		expect(parseAListOfComponentValues("url(a\\", 0, {})).toHaveLength(1);
-		expect(parseAListOfComponentValues("url(\\", 0, {})).toHaveLength(1);
-	});
-
-	it("emits an unterminated comment at EOF so token ranges cover all input", () => {
-		expect(tokenRoundtrip("a /* unterminated")).toBe("a /* unterminated");
-		expect(tokenRoundtrip("/* x")).toBe("/* x");
-	});
-
-	it("emits a string with a trailing backslash at EOF", () => {
-		expect(tokenRoundtrip('"ab\\')).toBe('"ab\\');
-		expect(tokenRoundtrip("url('a\\")).toBe("url('a\\");
-	});
-
-	it("never drops input bytes around a NUL code point", () => {
-		expect(tokenRoundtrip(`a${NUL}b`)).toBe(`a${NUL}b`);
-	});
-});
-
-// A `\` carries three meanings a stylesheet a build reads never reaches, since
-// each needs the source to stop mid-escape or to spell a newline the corpus
-// does not: §4.3.5 inside a string and §4.3.7 everywhere else.
-describe("CssSyntax — an escape the input ran out of", () => {
-	const CR = String.fromCharCode(0x0d);
-	const FF = String.fromCharCode(0x0c);
-
-	/**
-	 * @param {string} src css source whose first component value is a leaf token
-	 * @returns {string | number} that token's unescaped text
-	 */
-	const unescapedOf = (src) => A.value(parseAListOfComponentValues(src)[0]);
-
-	it("removes a line continuation however the newline is spelled", () => {
-		expect(unescapedOf('"a\\\nb"')).toBe("ab");
-		expect(unescapedOf(`"a\\${CR}b"`)).toBe("ab");
-		expect(unescapedOf(`"a\\${CR}\nb"`)).toBe("ab");
-		expect(unescapedOf(`"a\\${FF}b"`)).toBe("ab");
-	});
-
-	it("reads an escape before a continuation as the escape it is", () => {
-		// The `\` closing `\41` is what opens the continuation, so reading the
-		// two together would spell U+041B rather than `A` and `b`.
-		expect(unescapedOf('"\\41\\\nb"')).toBe("Ab");
-		expect(unescapedOf('"a\\\\b"')).toBe("a\\b");
-		expect(unescapedOf('"a\\\\\\\nb"')).toBe("a\\b");
-	});
-
-	it("names nothing at end of input inside a string", () => {
-		expect(unescapedOf('"ab\\')).toBe("ab");
-		// An odd run of backslashes escaped the quote, so it closes nothing and
-		// the token runs to the end of the input.
-		expect(unescapedOf('"ab\\"')).toBe('ab"');
-	});
-
-	it("names the replacement character at end of input anywhere else", () => {
-		expect(unescapedOf("ab\\")).toBe("ab�");
-		expect(unescapedOf("#ab\\")).toBe("ab�");
-		expect(unescapedOf("@ab\\")).toBe("ab�");
-	});
-
-	it("prints what the escape names rather than the backslash", () => {
-		// Printing the `\` would escape the `}` or `;` written after it, so a
-		// second pass would read one construct where the first wrote one.
-		expect(minifyFor("a{color:re\\")).toBe("a{color:re�}");
-		expect(minifyFor("@\\30 media\\")).toBe("@\\30media�;");
-		expect(minifyFor('a{content:"x\\')).toBe('a{content:"x"}');
-	});
-});
-
-// §4.3.8 leaves a `\` a delim only where a newline follows it. Printing one is
-// therefore printing that newline: every other character it could be followed
-// by makes it an escape of that character instead.
-describe("CssSyntax — a backslash delim", () => {
-	/**
-	 * @param {string} src css source
-	 * @returns {string} minified twice, to show the first pass is a fixed point
-	 */
-	const twice = (src) => minifyFor(minifyFor(src));
-
-	it("keeps the newline that makes it a delim", () => {
-		expect(minifyFor("a{color:re\\\n}")).toBe("a{color:re \\\n}");
-		expect(minifyFor("@foo bar\\\n")).toBe("@foo bar \\\n;");
-		expect(minifyFor("a[x=y\\\n]{color:red}")).toBe("a[x=y \\\n]{color:red}");
-	});
-
-	it("prints a fixed point wherever one ends a run", () => {
-		// Each of these ends the run the printer then writes `;`, `}`, `{` or
-		// `]` after — the characters a `\` would otherwise escape.
-		for (const src of [
-			"@foo bar\\\n",
-			"@foo\\\n",
-			"@media a\\\n{b{color:red}}",
-			"a{color:re\\\n}",
-			"a\\\n{color:red}",
-			"a{b\\\n{color:red}}",
-			"a{color:rgb(1 2 3 \\\n)}",
-			"a[x=y\\\n]{color:red}",
-			"a{color:red\\\n!important}"
-		]) {
-			expect(twice(src)).toBe(minifyFor(src));
-		}
-	});
-});
-
 // CSS Syntax 3 §3.3, the half webpack does not get from reading newlines as it
 // tokenizes: a NUL stands for the replacement character.
 describe("CssSyntax — preprocessing the input stream", () => {
-	const NUL = String.fromCharCode(0);
-
-	it("reads a NUL as the replacement character", () => {
-		// U+FFFD is an ident code point where a NUL is not, so the runs either
-		// side of one are a single identifier rather than three tokens.
-		expect(cvTypes(`a${NUL}b`)).toEqual(cvTypes("a�b"));
-		expect(A.value(parseAListOfComponentValues(`a${NUL}b`)[0])).toBe(
-			"a\uFFFDb"
-		);
-	});
-
 	it("leaves a surrogate, which tokenizes as that character already", () => {
 		// §3.3 names surrogates too, and webpack skips them because a lone one is
 		// an ident code point here. Should that stop being true, this fails and
@@ -308,28 +154,6 @@ describe("CssSyntax — preprocessing the input stream", () => {
 			).toEqual(cvUnescaped(wrap("\uFFFD")));
 		}
 	});
-
-	it("reads one wherever the source holds it", () => {
-		expect(cvTypes(`12${NUL}red`)).toEqual(cvTypes("12�red"));
-		expect(cvTypes(`url(a${NUL}b)`)).toEqual(cvTypes("url(a�b)"));
-		expect(minifyFor(`.x${NUL}y{color:red}`)).toBe(".x�y{color:red}");
-	});
-
-	it("reads one in a custom media name the walk resolves ahead", () => {
-		// The rules are read before the walk; a NUL there must still name U+FFFD,
-		// or `--a` is never seen to read `--b�c` and is left unresolved.
-		/** @type {(c: string) => string} */
-		const css = (c) =>
-			`@custom-media --a (--b${c}c);@custom-media --b${c}c (min-width:1px);@media (--a){.x{color:red}}`;
-		/** @type {(code: string) => string} */
-		const minify = (code) =>
-			new SourceProcessor().process(code, {
-				mode: "minify",
-				transforms: { customMedia: true }
-			}).code;
-		expect(minify(css(NUL))).toBe(minify(css("�")));
-		expect(minify(css(NUL))).toContain("@media (width>=1px){");
-	});
 });
 
 /**
@@ -344,103 +168,6 @@ const cvTypes = (src) =>
  */
 const cvUnescaped = (src) =>
 	parseAListOfComponentValues(src).map((n) => `${A.value(n)}${A.name(n)}`);
-/**
- * @param {string} src css source
- * @returns {number} the first token's type
- */
-const firstTokenType = (src) =>
-	/** @type {import("../../../lib/css/syntax-parser").MutableToken} */ (
-		readToken(
-			src,
-			0,
-			/** @type {import("../../../lib/css/syntax-parser").MutableToken} */ ({})
-		)
-	).type;
-
-describe("CssSyntax — tokenizer edge cases", () => {
-	it("treats an unterminated string at EOF as a string token", () => {
-		expect(firstTokenType('"abc')).toBe(TokenType.String);
-	});
-
-	it("treats an unterminated url at EOF as a url token", () => {
-		expect(firstTokenType("url(abc")).toBe(TokenType.Url);
-		expect(firstTokenType("url(abc   ")).toBe(TokenType.Url);
-	});
-
-	it("turns a malformed url into a bad-url token", () => {
-		expect(firstTokenType('url(a"b)')).toBe(TokenType.BadUrl);
-		expect(firstTokenType("url(a\\26 z x)")).toBe(TokenType.BadUrl);
-		// an escape encountered during bad-url recovery is consumed, not re-scanned
-		expect(firstTokenType("url(a b\\)c)")).toBe(TokenType.BadUrl);
-	});
-
-	it("readToken returns undefined once the input is fully consumed", () => {
-		// "a" is a single 1-char ident token; reading past it (offset 1) is EOF.
-		expect(
-			readToken(
-				"a",
-				0,
-				/** @type {import("../../../lib/css/syntax-parser").MutableToken} */ ({})
-			)
-		).toBeDefined();
-		expect(
-			readToken(
-				"a",
-				1,
-				/** @type {import("../../../lib/css/syntax-parser").MutableToken} */ ({})
-			)
-		).toBeUndefined();
-	});
-
-	it("turns a newline inside a string into a bad-string token", () => {
-		expect(firstTokenType('"a\nb')).toBe(TokenType.BadString);
-	});
-
-	it("consumes CRLF as a single whitespace run and inside escapes", () => {
-		expect(firstTokenType("a\r\nb")).not.toBe(TokenType.EOF);
-		// escaped CR/LF line-continuation inside a string exercises the
-		// CRLF-collapsing escaped-newline path.
-		expect(firstTokenType('"a\\\r\nb"')).toBe(TokenType.String);
-	});
-});
-
-describe("CssSyntax — a string the source never closed", () => {
-	/**
-	 * @param {string} source css
-	 * @returns {string[]} every string token's value
-	 */
-	const values = (source) => {
-		/** @type {string[]} */
-		const seen = [];
-		new SourceProcessor()
-			.use({
-				[NodeType.String]: {
-					enter: (/** @type {import("../../../lib/css/syntax-parser").CssPath} */ path) =>
-						seen.push(/** @type {string} */ (path.value()))
-				}
-			})
-			.process(source);
-		return seen;
-	};
-
-	// §4.3.5 returns the string token at end of input as well, and that one has no
-	// closing quote to take off — taking one off ate a character of the value.
-	it.each([
-		["a closing quote", "a{b:'xy'}", ["xy"]],
-		["end of input", "a{b:'xy", ["xy"]],
-		["end of input, holding a brace", "a{b:'xy}", ["xy}"]],
-		["end of input, holding only one", "a{b:'}", ["}"]],
-		["end of input, holding nothing", "a{b:'", [""]],
-		["a double quote at end of input", 'a{b:"d', ["d"]],
-		["an empty string", "a{b:''}", [""]],
-		["a quote the source escaped", "a{b:'a\\''}", ["a'"]],
-		["one escaped at end of input", "a{b:'a\\'", ["a'"]],
-		["a backslash the source escaped", "a{b:'a\\\\'}", ["a\\"]],
-		["two of them", "a{b:'x' 'y'}", ["x", "y"]]
-	])("reads one ended by %s", (_name, source, expected) => {
-		expect(values(source)).toEqual(expected);
-	});
-});
 
 describe("CssSyntax — code point and substitution helpers", () => {
 	const {
@@ -493,59 +220,6 @@ describe("CssSyntax — code point and substitution helpers", () => {
 	});
 });
 
-describe("CssSyntax — tokens at the end of the input", () => {
-	/**
-	 * @param {string} src css source
-	 * @returns {[number, number, number][]} each raw token's type and range
-	 */
-	const tokensOf = (src) => {
-		/** @type {[number, number, number][]} */
-		const tokens = [];
-		for (let pos = 0; ; ) {
-			const t = readToken(
-				src,
-				pos,
-				/** @type {import("../../../lib/css/syntax-parser").MutableToken} */ ({})
-			);
-			if (t === undefined) break;
-			tokens.push([t.type, t.start, t.end]);
-			pos = t.end;
-		}
-		return tokens;
-	};
-
-	it("reads a lone `@` as a delim and `@` with a name as an at-keyword", () => {
-		expect(tokensOf("@")).toEqual([[TokenType.Delim, 0, 1]]);
-		expect(tokensOf("@a")).toEqual([[TokenType.AtKeyword, 0, 2]]);
-	});
-
-	it("runs a bad url the input never closed to the end of the input", () => {
-		// §4.3.14 consumes the remnants up to `)` or EOF, whichever comes first.
-		expect(tokensOf('url(a"b')).toEqual([[TokenType.BadUrl, 0, 7]]);
-		expect(tokensOf("url(a b")).toEqual([[TokenType.BadUrl, 0, 7]]);
-	});
-
-	it("does not reread the first code point when a `-` ends the input", () => {
-		// §4.3.9: `-` then EOF starts no ident sequence, so the `-` is a delim.
-		expect(tokensOf("1-")).toEqual([
-			[TokenType.Number, 0, 1],
-			[TokenType.Delim, 1, 2]
-		]);
-		expect(tokensOf("@-")).toEqual([
-			[TokenType.Delim, 0, 1],
-			[TokenType.Delim, 1, 2]
-		]);
-		expect(tokensOf("1-a")).toEqual([[TokenType.Dimension, 0, 3]]);
-		expect(tokensOf("@-a")).toEqual([[TokenType.AtKeyword, 0, 3]]);
-	});
-
-	it("marks a hash of a lone `-` as unrestricted", () => {
-		const out = /** @type {import("../../../lib/css/syntax-parser").MutableToken} */ ({});
-		expect(readToken("#-", 0, out)).toMatchObject({ type: TokenType.Hash, isId: false });
-		expect(readToken("#-a", 0, out)).toMatchObject({ type: TokenType.Hash, isId: true });
-	});
-});
-
 describe("CssSyntax — the token stream", () => {
 	const { _S } = require("../../../lib/css/syntax-parser");
 
@@ -562,7 +236,7 @@ describe("CssSyntax — the token stream", () => {
 		/** @type {string[]} */
 		const seen = [];
 		const stream = new TokenStream(
-			"/*1*/a/*2*/ b",
+			fixture("css", "css-syntax-the-token-stream-fires-each-comment-once-even-when-a-mark-rewinds"),
 			0,
 			undefined,
 			(input, start, end) => seen.push(input.slice(start, end))
@@ -587,17 +261,17 @@ describe("CssSyntax — the token stream", () => {
 			parseAListOfComponentValues(src);
 			return _S._openCommentStart;
 		};
-		expect(openCommentOf("a /* x")).toBe(2);
-		expect(openCommentOf("/*")).toBe(0);
+		expect(openCommentOf(fixture("css", "css-syntax-the-token-stream-notes-where-a-comment-the-source-never-closed-opens"))).toBe(2);
+		expect(openCommentOf(fixture("css", "css-syntax-path-reads-on-every-node-kind-reads-a-comment-s-text-closed-or-2"))).toBe(0);
 		// `/*/` and `/* **` end in what could close a comment, but not one opened there.
-		expect(openCommentOf("a/*/")).toBe(1);
-		expect(openCommentOf("a/* **")).toBe(1);
-		expect(openCommentOf("a /**/")).toBe(-1);
-		expect(openCommentOf("a /* x */ b")).toBe(-1);
+		expect(openCommentOf(fixture("css", "css-syntax-the-token-stream-notes-where-a-comment-the-source-never-closed-opens-2"))).toBe(1);
+		expect(openCommentOf(fixture("css", "css-syntax-the-token-stream-notes-where-a-comment-the-source-never-closed-opens-3"))).toBe(1);
+		expect(openCommentOf(fixture("css", "css-syntax-the-token-stream-notes-where-a-comment-the-source-never-closed-opens-4"))).toBe(-1);
+		expect(openCommentOf(fixture("css", "css-syntax-the-token-stream-notes-where-a-comment-the-source-never-closed-opens-5"))).toBe(-1);
 	});
 
 	it("steps over whitespace without lexing it, unless a token is cached", () => {
-		const stream = new TokenStream(" \t\n\fa b");
+		const stream = new TokenStream(fixture("css", "css-syntax-the-token-stream-steps-over-whitespace-without-lexing-it-unless-a"));
 		stream.skipWhitespace();
 		expect(peek(stream)).toEqual([TokenType.Ident, "a"]);
 		// The cached `a` is still the next token.
@@ -615,24 +289,24 @@ describe("CssSyntax — the token stream", () => {
 			stream.skipPreludeLeaves();
 			return peek(stream);
 		};
-		expect(afterPrelude("a .b{")).toEqual([TokenType.LeftCurlyBracket, "{"]);
+		expect(afterPrelude(fixture("css", "css-syntax-the-token-stream-steps-over-a-selector-prelude-up-to-what-has-to-be"))).toEqual([TokenType.LeftCurlyBracket, "{"]);
 		// A name running into `(` is lexed with it, as one function or url token.
-		expect(afterPrelude("a b:not(x){}")).toEqual([TokenType.Function, "not("]);
-		expect(afterPrelude("ab(")).toEqual([TokenType.Function, "ab("]);
-		expect(afterPrelude("a url(x) b{")).toEqual([TokenType.Url, "url(x)"]);
-		expect(afterPrelude("a (b)")).toEqual([TokenType.LeftParenthesis, "("]);
-		expect(afterPrelude("abc")).toEqual([TokenType.EOF, ""]);
+		expect(afterPrelude(fixture("css", "css-syntax-the-token-stream-steps-over-a-selector-prelude-up-to-what-has-to-be-2"))).toEqual([TokenType.Function, "not("]);
+		expect(afterPrelude(fixture("css", "css-syntax-the-token-stream-steps-over-a-selector-prelude-up-to-what-has-to-be-3"))).toEqual([TokenType.Function, "ab("]);
+		expect(afterPrelude(fixture("css", "css-syntax-the-token-stream-steps-over-a-selector-prelude-up-to-what-has-to-be-4"))).toEqual([TokenType.Url, "url(x)"]);
+		expect(afterPrelude(fixture("css", "css-syntax-the-token-stream-steps-over-a-selector-prelude-up-to-what-has-to-be-5"))).toEqual([TokenType.LeftParenthesis, "("]);
+		expect(afterPrelude(fixture("css", "css-syntax-the-token-stream-steps-over-a-selector-prelude-up-to-what-has-to-be-6"))).toEqual([TokenType.EOF, ""]);
 	});
 
 	it("does not step over a prelude while a token is cached", () => {
-		const stream = new TokenStream("a .b{");
+		const stream = new TokenStream(fixture("css", "css-syntax-the-token-stream-steps-over-a-selector-prelude-up-to-what-has-to-be"));
 		stream.next();
 		stream.skipPreludeLeaves();
 		expect(peek(stream)).toEqual([TokenType.Ident, "a"]);
 	});
 
 	it("parses on from where an existing stream stands", () => {
-		const stream = new TokenStream("a b c");
+		const stream = new TokenStream(fixture("css", "css-syntax-the-token-stream-parses-on-from-where-an-existing-stream-stands"));
 		stream.consume();
 		expect(cvTypes(/** @type {EXPECTED_ANY} */ (stream))).toEqual([
 			NodeType.Whitespace,
@@ -644,6 +318,8 @@ describe("CssSyntax — the token stream", () => {
 });
 
 describe("CssSyntax — name and range helpers", () => {
+	const webpack = require("webpack");
+	const { terminateIdentifier, unescapeIdentifier } = webpack.css.syntax.parser;
 	const {
 		_trimCssWhiteSpace,
 		asciiLowercaseName,
@@ -654,6 +330,24 @@ describe("CssSyntax — name and range helpers", () => {
 		skipEscape,
 		toLowerCaseIfNeeded
 	} = require("../../../lib/css/syntax-parser");
+
+	it.each([
+		["foo", "foo"],
+		["\\31", "\\31 "],
+		["\\000031", "\\000031 "],
+		["\\000031f", "\\000031f"],
+		["\\31 ", "\\31 "],
+		["\\31-start", "\\31-start"],
+		["\\\\31", "\\\\31"],
+		["\\\\\\31", "\\\\\\31 "],
+		["\\--foo", "\\--foo"]
+	])("preserves the separator after %s", (input, expected) => {
+		const terminated = terminateIdentifier(input);
+		expect(terminated).toBe(expected);
+		expect(unescapeIdentifier(`${terminated} next`)).toBe(
+			`${unescapeIdentifier(input)} next`
+		);
+	});
 
 	it("trims only the whitespace CSS skips", () => {
 		expect(_trimCssWhiteSpace(" \t\na\n\f ")).toBe("a");
@@ -712,30 +406,3 @@ describe("CssSyntax — name and range helpers", () => {
 	});
 });
 
-describe("CssSyntax — a signed number printed after a number", () => {
-	/**
-	 * @param {string} src css source
-	 * @returns {[number, string][]} each component value's type and source text
-	 */
-	const valuesOf = (src) =>
-		parseAListOfComponentValues(src).map((n) => [A.type(n), A.source(n)]);
-
-	it("drops the space where the sign starts a number of its own", () => {
-		// §4.3.3: `-` before a digit starts a number, not a unit, so `0-2px` is two tokens.
-		expect(minifyFor("a{margin:0 -2px}")).toBe("a{margin:0-2px}");
-		expect(minifyFor("a{margin:0 -.5px}")).toBe("a{margin:0-.5px}");
-		expect(valuesOf("0-2px")).toEqual([
-			[NodeType.Number, "0"],
-			[NodeType.Dimension, "-2px"]
-		]);
-		expect(valuesOf("0-.5px")).toEqual([
-			[NodeType.Number, "0"],
-			[NodeType.Dimension, "-.5px"]
-		]);
-	});
-
-	it("keeps the space where the sign would start a unit", () => {
-		expect(minifyFor("a{margin:0 -a}")).toBe("a{margin:0 -a}");
-		expect(valuesOf("0-a")).toEqual([[NodeType.Dimension, "0-a"]]);
-	});
-});

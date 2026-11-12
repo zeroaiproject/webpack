@@ -2,8 +2,11 @@
 test/statsCases/** eol=lf
 test/hotCases/** eol=lf
 test/configCases/asset-modules/query-suffixes/raw.txt eol=lf
+test/configCases/asset-modules/build-http-cache-loader-syntax/** eol=lf
 test/configCases/asset-modules/minify-embedded-source/note.txt eol=lf
 test/configCases/asset-modules/minimize-embedded-asset-source/note.txt eol=lf
+test/configCases/analyzable/reserved-name-text/text.txt eol=lf
+test/configCases/concatenate-modules/marker-like-text-wrapped/text.txt eol=lf
 test/configCases/loader-import-module/build-time-types/*.txt eol=lf
 test/configCases/css/public-path/*.js eol=lf
 test/configCases/copy/** eol=lf
@@ -52,3 +55,6 @@ bin/* eol=lf
 *.css eol=lf
 *.html eol=lf
 **/*webpack.lock.data/** -text
+test/fixtures/css/*/index.css -text
+test/fixtures/javascript/*/index.js -text
+test/fixtures/xml/*/index.xml -text

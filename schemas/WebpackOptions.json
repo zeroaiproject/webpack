@@ -4422,7 +4422,7 @@
           "added": "5.110.0"
         },
         "removeRedundantAttributes": {
-          "description": "Drop an attribute whose value is the one the element already defaults to. Off by default: an attribute a page no longer carries is one `getAttribute` and every attribute selector read differently, whichever tier dropped it. `true` (or `\"smart\"`) drops only markers on elements that render nothing — `<script type=text/javascript>`, `<script language=javascript>`, `<script charset=utf-8>`, `<style type=text/css>`, `<link type=text/css>`, `<link media=all>` — so no rule that styles the page stops applying, which is what `@swc/html` does by default. `\"all\"` also drops spec defaults such as `<input type=text>` and `<form method=get>`, which reaches further still: an attribute selector matches the content attribute, not the reflected default, so `input[type=text]` stops matching.",
+          "description": "Drop an attribute whose value is the one the element already defaults to. Off by default: an attribute a page no longer carries is one `getAttribute` and every attribute selector read differently, whichever tier dropped it. `true` (or `\"smart\"`) drops only markers on elements that render nothing — `<script type=text/javascript>`, `<script language=javascript>`, `<script charset=utf-8>` on a page that declares UTF-8, `<style type=text/css>`, `<link type=text/css>`, `<link media=all>` — so no rule that styles the page stops applying, which is what `@swc/html` does by default. `\"all\"` also drops spec defaults such as `<input type=text>` and `<form method=get>`, which reaches further still: an attribute selector matches the content attribute, not the reflected default, so `input[type=text]` stops matching.",
           "anyOf": [
             {
               "enum": ["smart", "all"]
@@ -5674,11 +5674,12 @@
             },
             {
               "type": "object",
-              "additionalProperties": true
+              "additionalProperties": true,
+              "tsType": "import('../lib/fs/fs').JsonObject"
             },
             {
               "instanceof": "Function",
-              "tsType": "((name: string) => false | string | { [key: string]: EXPECTED_ANY })"
+              "tsType": "((name: string) => false | string | import('../lib/fs/fs').JsonObject)"
             }
           ]
         },
@@ -6635,7 +6636,8 @@
             },
             {
               "type": "object",
-              "additionalProperties": true
+              "additionalProperties": true,
+              "tsType": "import('../lib/resolve/ResolverFactory').UnsafeCache"
             }
           ]
         },
@@ -7285,6 +7287,15 @@
                   "$ref": "#/definitions/RuleSetLoaderOptions"
                 }
               ]
+            },
+            "sourceTest": {
+              "description": "Run the loader's normal function only when its current input matches this condition, the same kind of condition 'test' takes. Input that is not valid UTF-8 text always runs it.",
+              "oneOf": [
+                {
+                  "$ref": "#/definitions/RuleSetConditionOrConditions"
+                }
+              ],
+              "added": "5.113.0"
             }
           }
         },

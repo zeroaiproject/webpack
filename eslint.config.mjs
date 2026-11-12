@@ -153,7 +153,8 @@ export default defineConfig([
 		plugins: { jsdoc: getJsdocPlugin() },
 		rules: {
 			// The keywords an option type states for `tooling/generate-schemas.js`,
-			// which JSON Schema has and JSDoc does not
+			// which JSON Schema has and JSDoc does not, and `augmentable`, which
+			// `tooling/generate-types.js` exports for declaration merging
 			"jsdoc/check-tag-names": [
 				"error",
 				{
@@ -180,7 +181,8 @@ export default defineConfig([
 						"tsType",
 						"typeOnly",
 						"properties",
-						"not"
+						"not",
+						"augmentable"
 					]
 				}
 			]
@@ -372,6 +374,15 @@ export default defineConfig([
 			"tooling/compare-xml-tools.js"
 		],
 		rules: {
+			"n/no-unsupported-features/node-builtins": "off"
+		}
+	},
+	{
+		// Records every module a fresh process loads through `module.registerHooks`,
+		// so it runs on the Node `lint` uses and skips itself on an older one.
+		files: ["tooling/check-module-loading.js"],
+		rules: {
+			"n/no-unsupported-features/es-syntax": "off",
 			"n/no-unsupported-features/node-builtins": "off"
 		}
 	},

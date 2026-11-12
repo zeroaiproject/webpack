@@ -24,6 +24,9 @@
 .dup { color: navy; }
 #anchor { color: brand; }
 @media small { .responsive { color: brand; } }
+@keyframes spin { to { opacity: 0; } }
+.spinning { animation: spin 1s; }
+.a\>b { color: olive; }
 </style>
 <link rel="stylesheet" href="./linked.module.css">
 <style module lang="less">
@@ -55,5 +58,10 @@ $size: 6px;
 <p class="lessComposes lessLocal">composes in a less module</p>
 <p class="scssValue scssComposes">@value and composes in an scss module</p>
 <p class="later">a later sheet names what no earlier one declares</p>
+<p class="spin spinning">a @keyframes name is not a class</p>
+<p class="local&nbsp;x" id="&nbsp;anchor">a no-break space is part of a name</p>
+<p class=a&gt;b>an unquoted value a name makes unsafe</p>
+<script class="local">window.first = 1;</script>
+<script class="local">window.second = 2;</script>
 </body>
 </html>
