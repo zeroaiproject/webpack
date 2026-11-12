@@ -48,3 +48,12 @@ it("should scope a linked CSS module and leave a linked global sheet", () => {
 	const global = fs.readFileSync(path.resolve(__dirname, "global.css"), "utf-8");
 	expect(global).toMatch(/\.global \{\s*color: gray;\s*\}/);
 });
+
+it("should generate the page and the linked sheets", () => {
+	expect(page).toMatchSnapshot();
+	for (const name of ["card.module.css", "by-rule.css", "global.css"]) {
+		expect(
+			fs.readFileSync(path.resolve(__dirname, name), "utf-8")
+		).toMatchSnapshot(name);
+	}
+});

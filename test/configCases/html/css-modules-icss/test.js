@@ -150,3 +150,10 @@ it("should scope a name only an attribute selector scopes", () => {
 	);
 	expect(sheet).toMatch(/\[class~="m_byAttribute"\] \{ color: coral; \}/);
 });
+
+it("should generate the page and the linked sheet", () => {
+	expect(page).toMatchSnapshot();
+	expect(
+		fs.readFileSync(path.resolve(__dirname, "linked.module.css"), "utf-8")
+	).toMatchSnapshot();
+});
